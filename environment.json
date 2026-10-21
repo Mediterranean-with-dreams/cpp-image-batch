@@ -1,0 +1,11 @@
+{
+  "cppStandard": 17,
+  "qtVersion": "6.8.3",
+  "qtArchitecture": "win64_mingw",
+  "mingwVersion": "13.1.0",
+  "mingwPackage": "qt.tools.win64_mingw1310",
+  "aqtinstall": "3.3.0",
+  "cmake": "3.31.6",
+  "ninja": "1.11.1.4",
+  "bootstrapPython": "3.12.10"
+}

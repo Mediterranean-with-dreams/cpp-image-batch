@@ -1,0 +1,80 @@
+# ImageBatch · C++ 图片批处理工具
+
+使用 **C++17 + Qt Widgets** 开发的 Windows 桌面小项目：导入文件夹，预览效果，批量缩放、转换格式并添加文字水印。图片在本地处理，原图保持不变。
+
+![中文界面与处理效果](docs/screenshot.png)
+
+## 使用
+
+完整解压 `ImageBatch-1.0.0-windows-x64.zip` 后双击 `ImageBatch.exe`。程序包自带运行依赖，无需安装开发环境。目标系统为 Windows 10 / 11 x64。
+
+1. 点击“选择文件夹”，或输入路径后点击“导入图片”。
+2. 设置最长边、输出格式、JPEG 质量及可选水印；点击图片查看预览。
+3. 点击“开始批量处理”。默认保存到来源目录下的 `processed` 文件夹。
+4. 处理结束后打开输出目录或查看 CSV 报告。取消只停止后续任务，已完成的图片会保留。
+
+`samples` 文件夹提供程序生成的示例图片，可直接用于试用。
+
+## 功能与边界
+
+| 项目 | 行为 |
+| --- | --- |
+| 输入 | JPG / JPEG / PNG / BMP，扩展名不区分大小写；仅扫描当前文件夹 |
+| 缩放 | 等比例缩小，默认最长边 1920 px；0 表示保持尺寸；不放大小图 |
+| 输出 | JPG / PNG / BMP；JPEG 质量 1～100，默认 90 |
+| 透明度 | PNG 保留透明度；JPG 和 BMP 使用白色背景 |
+| 水印 | 右下角文字，最多 100 个字符，字体随图像尺寸与文字宽度调整 |
+| 预览 | 后台生成；JPG 预览包含质量参数对应的编码效果 |
+| 文件保护 | 保留原图；输出目录与来源目录分开；输出名加 `_processed`，重名追加编号 |
+| 错误与取消 | 单张失败后继续；取消在当前图片完成后生效；报告记录所有任务状态 |
+| 报告 | UTF-8 BOM CSV，记录输入/输出路径、状态、错误和尺寸 |
+
+读取时应用照片方向信息；输出不承诺保留原始 EXIF、GPS 等元数据。有效颜色配置转换到 sRGB。单张解码使用 Qt 的 256 MiB 分配限制，超限图片会报错。JPEG 是有损编码，处理后文件不保证一定更小。第一版不含 GIF、RAW、HEIC、递归扫描、裁剪及 AI 模型功能。
+
+## 环境隔离与构建
+
+开发依赖放在项目 `.tools` 中，版本由 [environment.json](environment.json) 管理：Qt 6.8.3、MinGW 13.1.0、CMake 3.31.6、Ninja 1.11.1.4、aqtinstall 3.3.0。脚本临时设置进程环境并在结束时恢复，不修改系统 PATH，也不影响其他 C++ 项目。下载的 SDK 不提交 Git。
+
+```text
+.tools/Qt/6.8.3/mingw_64/      Qt SDK
+.tools/Qt/Tools/mingw1310_64/  配套编译器
+.tools/python/                aqtinstall、CMake、Ninja
+src/                          处理逻辑、后台任务、图形界面
+tests/                        Qt Test 自动测试
+scripts/                      安装、构建、测试与运行入口
+build-windows/                构建和测试证据
+dist/                         可运行程序包
+```
+
+在项目目录运行 PowerShell：
+
+```powershell
+# 首次准备需要联网；可用 -PythonPath 指定现有 Python 3.10+。
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Setup-Environment.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Package.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-Package.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Run.ps1
+```
+
+`Bypass` 仅对该次 PowerShell 进程生效。安装脚本在没有可用 Python 时下载项目专用的嵌入式 Python；软件本身由 C++ 编译生成，运行不需要 Python。维护方式见 [环境说明](docs/环境说明.md)。
+
+## 代码结构与学习点
+
+- `processor`：参数检查、目录扫描、图像缩放和水印、无覆盖保存、CSV 报告。
+- `batchworker`：工作线程逐张处理，发送进度，使用原子标记响应取消。
+- `mainwindow`：窗口、后台预览、用户操作与结果展示；工作线程不直接操作界面。
+- `packagecheck`：开发验收入口 `ImageBatch.exe --self-test <报告.json>`，驱动同一窗口完成真实批处理。
+
+可以学习类与模块划分、容器、文件读写、对象生命周期、信号槽、线程协作和自动测试。Qt 提供图像解码与编码，本项目实现处理流程、交互和错误处理。
+
+## 测试
+
+`scripts/Test.ps1` 运行 Qt Test 和 CTest；JUnit XML、测试日志、截图和示例图保存在 `build-windows/evidence`。覆盖尺寸、格式、透明度、照片方向、损坏文件、中文路径、重名保护、原图哈希及窗口操作。
+
+`scripts/Test-Package.ps1` 将 ZIP 解压到独立目录，移除 Qt 开发路径、只保留 Windows 系统 PATH，再运行实际 EXE 完成一次批处理。该检查验证当前电脑上的分发包独立性；结论及限制见 [测试报告](docs/测试报告.md)。
+
+## 许可证
+
+源码采用 [MIT](LICENSE)。Qt 和运行库采用各自许可证，见 [第三方说明](THIRD_PARTY_NOTICES.md)。示例图由测试代码绘制，无私人照片或网络素材。

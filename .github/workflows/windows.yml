@@ -1,0 +1,41 @@
+name: Windows build and test
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare isolated toolchain
+        shell: pwsh
+        run: ./scripts/Setup-Environment.ps1 -PythonPath (Get-Command python).Source
+      - name: Build
+        shell: pwsh
+        run: ./scripts/Build.ps1
+      - name: Test
+        shell: pwsh
+        run: ./scripts/Test.ps1
+      - name: Package
+        shell: pwsh
+        run: ./scripts/Package.ps1
+      - name: Verify portable package
+        shell: pwsh
+        run: ./scripts/Test-Package.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-build-and-test
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            build-windows/evidence/
+            tmp/package-check-*/package-check.json

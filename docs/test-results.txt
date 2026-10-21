@@ -1,0 +1,22 @@
+********* Start testing of ImageBatchTests *********
+Config: Using QtTest library 6.8.3, Qt 6.8.3 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 13.1.0), windows 10
+PASS   : ImageBatchTests::initTestCase()
+PASS   : ImageBatchTests::defaultsAndValidation()
+PASS   : ImageBatchTests::scanAndEmptyDirectory()
+PASS   : ImageBatchTests::proportionalResize()
+PASS   : ImageBatchTests::formatRoundTrip(jpg)
+PASS   : ImageBatchTests::formatRoundTrip(png)
+PASS   : ImageBatchTests::formatRoundTrip(bmp)
+PASS   : ImageBatchTests::jpegQualityAffectsEncoding()
+PASS   : ImageBatchTests::watermarkAndTinyImages()
+PASS   : ImageBatchTests::exifOrientation()
+PASS   : ImageBatchTests::failuresAndCollisions()
+PASS   : ImageBatchTests::reportCsvAndFailure()
+PASS   : ImageBatchTests::batchContinuesAfterFailure()
+PASS   : ImageBatchTests::cancellationStopsRemainingFiles()
+PASS   : ImageBatchTests::guiImportPreviewAndProcessing()
+PASS   : ImageBatchTests::guiBrokenPreviewStaysClearedAfterResize()
+PASS   : ImageBatchTests::guiEmptyInvalidAndCancel()
+PASS   : ImageBatchTests::cleanupTestCase()
+Totals: 18 passed, 0 failed, 0 skipped, 0 blacklisted, 2988ms
+********* Finished testing of ImageBatchTests *********
