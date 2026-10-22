@@ -1,6 +1,6 @@
 {
     "architecture": "x86_64",
-    "baseline_working_set_bytes": 15622144,
+    "baseline_working_set_bytes": 15683584,
     "budget_bytes": 536870912,
     "compiler": "13.1.0",
     "estimated_peak_reserved_bytes": 74129408,
@@ -8,7 +8,7 @@
     "format": "jpg",
     "hardware_threads": 6,
     "images": 36,
-    "images_per_second": 6.686478454680535,
+    "images_per_second": 9.491167940943845,
     "input_hashes": {
         "sample_000.jpg": "489a32e3bb0aa00ad1f458aaed7667d8642b8ba1f8d98c54f266293822d15900",
         "sample_001.png": "88448677fc65e439685cf6f6af6a37118e0496171ff0f2a874ef8372e8ef2e00",
@@ -96,10 +96,10 @@
     "qt": "6.8.3",
     "qt_helper_threads": 1,
     "queue_capacity": 2,
-    "sampled_peak_working_set_bytes": 61960192,
+    "sampled_peak_working_set_bytes": 65036288,
     "success": 36,
     "version": "1.1.0",
-    "wall_ms": 5384,
+    "wall_ms": 3793,
     "watermark": "ImageBatch Benchmark",
     "workers": 1
 }

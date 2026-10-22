@@ -9,8 +9,19 @@
 #include <QTemporaryFile>
 #include <QDateTime>
 #include <QTextStream>
+#include <QScopeGuard>
 #include <algorithm>
 #include <mutex>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#endif
 
 namespace imagebatch {
 QString validateOptions(const Options &o) {
@@ -99,6 +110,24 @@ QImage transformImage(const QImage &input, const Options &o) {
 static QString candidatePath(const QString &dir, const QString &stem, const QString &suffix, int n) {
     return QDir(dir).filePath(stem + (n ? "_" + QString::number(n) : QString()) + "." + suffix);
 }
+// Publish a fully closed temporary file without Qt's copy/truncate fallback.
+// The temporary file is in the destination directory, on the same filesystem.
+static bool publishNoReplace(const QString &source, const QString &destination, QString *error) {
+#ifdef Q_OS_WIN
+    const auto from = QDir::toNativeSeparators(source).toStdWString();
+    const auto to = QDir::toNativeSeparators(destination).toStdWString();
+    if (MoveFileW(from.c_str(), to.c_str())) return true;
+    *error = QStringLiteral("保存文件失败，Windows 错误码：%1").arg(GetLastError());
+#else
+    // link() fails if destination exists. Unlink only our temporary name.
+    if (::link(QFile::encodeName(source).constData(), QFile::encodeName(destination).constData()) == 0) {
+        QFile::remove(source);
+        return true;
+    }
+    *error = QString::fromLocal8Bit(std::strerror(errno));
+#endif
+    return false;
+}
 FileResult processFile(const QString &input, const QString &outputDir, const Options &o) {
     FileResult r;
     r.inputPath = input;
@@ -116,26 +145,29 @@ FileResult processFile(const QString &input, const QString &outputDir, const Opt
     if (image.isNull()) { r.error = QStringLiteral("图像处理失败或内存不足"); return r; }
     r.outputSize = image.size();
     if (!QDir().mkpath(outputDir)) { r.error = QStringLiteral("无法创建输出文件夹"); return r; }
-    QTemporaryFile temp(QDir(outputDir).filePath(".imagebatch-XXXXXX"));
-    if (!temp.open()) { r.error = temp.errorString(); return r; }
-    QImageWriter writer(&temp, o.format.toLatin1());
-    if (o.format == "jpg") writer.setQuality(o.jpegQuality);
-    if (!writer.write(image)) { r.error = writer.errorString(); return r; }
-    if (!temp.flush()) { r.error = temp.errorString(); return r; }
-    temp.close();
+    QString temporaryPath;
+    const auto cleanup = qScopeGuard([&] { if (!temporaryPath.isEmpty()) QFile::remove(temporaryPath); });
+    {
+        QTemporaryFile temp(QDir(outputDir).filePath(".imagebatch-XXXXXX"));
+        if (!temp.open()) { r.error = temp.errorString(); return r; }
+        QImageWriter writer(&temp, o.format.toLatin1());
+        if (o.format == "jpg") writer.setQuality(o.jpegQuality);
+        if (!writer.write(image)) { r.error = writer.errorString(); return r; }
+        if (!temp.flush()) { r.error = temp.errorString(); return r; }
+        temporaryPath = temp.fileName();
+        temp.setAutoRemove(false);
+    } // QTemporaryFile::close() alone keeps its native handle open; destroy it.
     const QString stem = QFileInfo(input).completeBaseName() + "_processed";
     for (int n = 0; n < 100000; ++n) {
         const QString out = candidatePath(outputDir, stem, o.format, n);
         if (QFileInfo::exists(out)) continue;
-        // QFile::rename refuses to overwrite an existing destination, including a race.
-        if (temp.rename(out)) {
-            temp.setAutoRemove(false);
+        if (publishNoReplace(temporaryPath, out, &r.error)) {
             r.outputPath = out;
             r.status = "success";
             r.error.clear();
             return r;
         }
-        if (!QFileInfo::exists(out)) { r.error = temp.errorString(); return r; }
+        if (!QFileInfo::exists(out)) return r;
     }
     r.error = QStringLiteral("同名文件过多，无法分配输出文件名");
     return r;

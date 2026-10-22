@@ -256,6 +256,41 @@ private slots:
         QCOMPARE(json.value("peak_queued").toInt(), summary.peakQueued);
         QCOMPARE(QDir(dir.filePath("out")).entryList({".imagebatch-*"}, QDir::Files | QDir::Hidden).size(), 0);
     }
+    void concurrentDistinctImagesPreserveContent() {
+        QTemporaryDir dir;
+        const auto output = dir.filePath("out"); QVERIFY(QDir().mkpath(output));
+        const auto sentinel = QDir(output).filePath("same_processed.png");
+        QFile existing(sentinel); QVERIFY(existing.open(QIODevice::WriteOnly));
+        QCOMPARE(existing.write("keep this existing file"), qint64(23)); existing.close();
+        const auto sentinelHash = digest(sentinel);
+        QStringList files; QList<QByteArray> originals;
+        QList<QColor> colors;
+        for (int i = 0; i < 16; ++i) {
+            const auto folder = dir.filePath(QString::number(i)); QVERIFY(QDir().mkpath(folder));
+            const auto path = QDir(folder).filePath("same.png");
+            const QColor color((i * 47) % 256, (i * 83) % 256, (i * 131) % 256);
+            QImage image(80, 60, QImage::Format_RGB32); image.fill(color); QVERIFY(image.save(path));
+            files << path; colors << color; originals << digest(path);
+        }
+        BatchSettings settings; settings.workers = 8; settings.queueCapacity = 2;
+        Options options; options.format = "png"; std::atomic_bool cancelled{false};
+        QSet<QString> allPaths; QMap<QString, QByteArray> savedHashes;
+        for (int round = 0; round < 4; ++round) {
+            const auto summary = runBatch(files, output, options, settings, cancelled);
+            QCOMPARE(summary.succeeded, 16); QCOMPARE(summary.failed, 0);
+            for (int i = 0; i < 16; ++i) {
+                const auto path = summary.results[i].outputPath;
+                QVERIFY(!allPaths.contains(path)); allPaths.insert(path);
+                const QImage image(path); QCOMPARE(image.size(), QSize(80, 60));
+                QCOMPARE(image.pixelColor(40, 30), colors[i]);
+                savedHashes.insert(path, digest(path)); QCOMPARE(digest(files[i]), originals[i]);
+            }
+            QCOMPARE(digest(sentinel), sentinelHash);
+            for (auto it = savedHashes.cbegin(); it != savedHashes.cend(); ++it) QCOMPARE(digest(it.key()), it.value());
+        }
+        QCOMPARE(allPaths.size(), 64);
+        QCOMPARE(QDir(output).entryList({".imagebatch-*"}, QDir::Files | QDir::Hidden).size(), 0);
+    }
     void serialAndParallelProduceIdenticalBytes() {
         QTemporaryDir dir; QStringList files;
         for (int i = 0; i < 6; ++i) {

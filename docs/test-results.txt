@@ -20,6 +20,7 @@ PASS   : ImageBatchTests::batchContinuesAfterFailure()
 PASS   : ImageBatchTests::cancellationStopsRemainingFiles()
 PASS   : ImageBatchTests::batchSettingsAndEstimatedMemory()
 PASS   : ImageBatchTests::parallelOutputCollisionAndMetrics()
+PASS   : ImageBatchTests::concurrentDistinctImagesPreserveContent()
 PASS   : ImageBatchTests::serialAndParallelProduceIdenticalBytes()
 PASS   : ImageBatchTests::budgetLimitsAdmissionsAndParallelCancellation()
 PASS   : ImageBatchTests::callbackFailureIsContained()
@@ -27,5 +28,5 @@ PASS   : ImageBatchTests::guiImportPreviewAndProcessing()
 PASS   : ImageBatchTests::guiBrokenPreviewStaysClearedAfterResize()
 PASS   : ImageBatchTests::guiEmptyInvalidAndCancel()
 PASS   : ImageBatchTests::cleanupTestCase()
-Totals: 27 passed, 0 failed, 0 skipped, 0 blacklisted, 4722ms
+Totals: 28 passed, 0 failed, 0 skipped, 0 blacklisted, 5865ms
 ********* Finished testing of ImageBatchTests *********

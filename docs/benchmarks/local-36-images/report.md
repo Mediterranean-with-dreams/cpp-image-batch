@@ -9,9 +9,9 @@ Qt helper pool is limited to one thread. Estimated buffer budget is 512 MiB.
 
 | Workers | Median wall time (ms) | Speedup vs 1 |
 | --- | ---: | ---: |
-| 1 | 5446 | 1 |
-| 2 | 3274 | 1.663 |
-| 4 | 2067 | 2.635 |
+| 1 | 3793 | 1 |
+| 2 | 2078 | 1.825 |
+| 4 | 1336 | 2.839 |
 
 All measured output SHA-256 values match the warmup output; source hashes are unchanged.
 Working set is sampled every 5 ms and is not an exact instantaneous peak. Estimated reservations are separate from process memory.

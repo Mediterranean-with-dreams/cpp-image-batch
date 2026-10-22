@@ -3,12 +3,12 @@
     "baseline_working_set_bytes": 15626240,
     "budget_bytes": 536870912,
     "compiler": "13.1.0",
-    "estimated_peak_reserved_bytes": 296517632,
+    "estimated_peak_reserved_bytes": 291602432,
     "failed": 0,
     "format": "jpg",
     "hardware_threads": 6,
     "images": 36,
-    "images_per_second": 17.41654571843251,
+    "images_per_second": 27.649769585253456,
     "input_hashes": {
         "sample_000.jpg": "489a32e3bb0aa00ad1f458aaed7667d8642b8ba1f8d98c54f266293822d15900",
         "sample_001.png": "88448677fc65e439685cf6f6af6a37118e0496171ff0f2a874ef8372e8ef2e00",
@@ -96,10 +96,10 @@
     "qt": "6.8.3",
     "qt_helper_threads": 1,
     "queue_capacity": 8,
-    "sampled_peak_working_set_bytes": 132800512,
+    "sampled_peak_working_set_bytes": 122101760,
     "success": 36,
     "version": "1.1.0",
-    "wall_ms": 2067,
+    "wall_ms": 1302,
     "watermark": "ImageBatch Benchmark",
     "workers": 4
 }
