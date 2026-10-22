@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Manifest = Get-Content -LiteralPath (Join-Path $ProjectRoot 'environment.json') -Raw | ConvertFrom-Json
+$AppVersion = (Get-Content -LiteralPath (Join-Path $ProjectRoot 'VERSION') -Raw).Trim()
+$PackageName = "ImageBatch-$AppVersion-windows-x64"
 
 function Get-DevContext {
     $devRoot = $ProjectRoot

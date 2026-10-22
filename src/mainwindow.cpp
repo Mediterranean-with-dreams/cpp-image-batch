@@ -9,18 +9,18 @@
 namespace imagebatch {
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     qRegisterMetaType<FileResult>();
-    setWindowTitle(QStringLiteral("ImageBatch · 图片批处理工具"));
+    setWindowTitle(QStringLiteral("ImageBatch %1 · 图片批处理工具").arg(IMAGEBATCH_VERSION));
     resize(1180, 820);
-    setMinimumSize(1000, 760);
+    setMinimumSize(1000, 780);
     auto *central = new QWidget;
     setCentralWidget(central);
     auto *root = new QVBoxLayout(central);
-    root->setContentsMargins(24, 20, 24, 20);
-    root->setSpacing(14);
+    root->setContentsMargins(20, 16, 20, 16);
+    root->setSpacing(10);
     auto *title = new QLabel(QStringLiteral("ImageBatch  图片批处理"));
     title->setObjectName("title");
     root->addWidget(title);
-    root->addWidget(new QLabel(QStringLiteral("缩放 · 格式转换 · 文字水印    |    本地处理，保留原图")));
+    root->addWidget(new QLabel(QStringLiteral("缩放 · 格式转换 · 四角水印 · 可控并行    |    本地处理，保留原图")));
 
     auto *folderBox = new QGroupBox(QStringLiteral("01  导入与保存位置"));
     auto *folders = new QGridLayout(folderBox);
@@ -48,11 +48,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     auto *listLayout = new QVBoxLayout(listBox);
     count_ = new QLabel(QStringLiteral("尚未导入图片"));
     listLayout->addWidget(count_);
-    table_ = new QTableWidget(0, 2);
+    table_ = new QTableWidget(0, 3);
     table_->setObjectName("fileTable");
-    table_->setHorizontalHeaderLabels({QStringLiteral("文件名"), QStringLiteral("状态")});
+    table_->setHorizontalHeaderLabels({QStringLiteral("文件名"), QStringLiteral("状态"), QStringLiteral("耗时 ms")});
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     table_->verticalHeader()->hide();
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -81,8 +82,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     watermarkEnabled_->setObjectName("watermarkEnabled");
     watermark_ = new QLineEdit;
     watermark_->setObjectName("watermarkText"); watermark_->setMaxLength(100);
-    watermark_->setPlaceholderText(QStringLiteral("右下角水印，例如 © 我的作品"));
+    watermark_->setPlaceholderText(QStringLiteral("水印文字，例如 © 我的作品"));
     watermark_->setEnabled(false);
+    watermarkPosition_ = new QComboBox;
+    watermarkPosition_->setObjectName("watermarkPosition");
+    watermarkPosition_->addItems({QStringLiteral("右下角"), QStringLiteral("左下角"), QStringLiteral("右上角"), QStringLiteral("左上角")});
+    watermarkPosition_->setEnabled(false);
+    workers_ = new QSpinBox;
+    workers_->setObjectName("workerCount"); workers_->setRange(1, 8); workers_->setValue(2);
+    budget_ = new QSpinBox;
+    budget_->setObjectName("memoryBudget"); budget_->setRange(64, 4096); budget_->setValue(512);
+    budget_->setSingleStep(64); budget_->setSuffix(" MiB");
+    budget_->setToolTip(QStringLiteral("按图片尺寸估算工作缓冲，限制同时解码的任务；不代表整个程序的内存硬上限。"));
     settings->addWidget(new QLabel(QStringLiteral("最长边")), 0, 0);
     settings->addWidget(edge_, 0, 1);
     settings->addWidget(new QLabel(QStringLiteral("输出格式")), 0, 2);
@@ -90,11 +101,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     settings->addWidget(new QLabel(QStringLiteral("JPEG 质量")), 1, 0);
     settings->addWidget(quality_, 1, 1);
     settings->addWidget(new QLabel(QStringLiteral("等比例缩小，不放大小图")), 1, 2, 1, 2);
-    settings->addWidget(watermarkEnabled_, 2, 0, 1, 2);
+    settings->addWidget(watermarkEnabled_, 2, 0);
+    settings->addWidget(watermarkPosition_, 2, 1);
     settings->addWidget(watermark_, 2, 2, 1, 2);
-    auto *hint = new QLabel(QStringLiteral("JPG / BMP 使用白色背景；PNG 保留透明度。水印自动适应图片宽度。"));
+    settings->addWidget(new QLabel(QStringLiteral("并行任务")), 3, 0);
+    settings->addWidget(workers_, 3, 1);
+    settings->addWidget(new QLabel(QStringLiteral("批处理预算")), 3, 2);
+    settings->addWidget(budget_, 3, 3);
+    auto *hint = new QLabel(QStringLiteral("PNG 保留透明度；JPG / BMP 使用白底。预算用于估算批处理缓冲。"));
     hint->setWordWrap(true); hint->setObjectName("hint");
-    settings->addWidget(hint, 3, 0, 1, 4);
+    settings->addWidget(hint, 4, 0, 1, 4);
     right->addWidget(optionBox);
 
     auto *previewBox = new QGroupBox(QStringLiteral("04  效果预览"));
@@ -104,7 +120,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     before_->setObjectName("beforePreview"); after_->setObjectName("afterPreview");
     for (auto *label : {before_, after_}) {
         label->setAlignment(Qt::AlignCenter);
-        label->setMinimumSize(190, 150);
+        label->setMinimumSize(190, 130);
         label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
         label->setStyleSheet("background:#eaf0f6;border:1px solid #d6e1ec;border-radius:8px;color:#61748a;");
     }
@@ -126,6 +142,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     status_ = new QLabel(QStringLiteral("准备就绪。请选择图片文件夹。"));
     status_->setObjectName("statusText"); status_->setWordWrap(true);
     root->addWidget(status_);
+    metrics_ = new QLabel(QStringLiteral("可设置 1～8 个并行任务；未开始处理。"));
+    metrics_->setObjectName("metricsText"); metrics_->setWordWrap(true);
+    root->addWidget(metrics_);
     auto *actions = new QHBoxLayout;
     openOutput_ = new QPushButton(QStringLiteral("打开输出目录"));
     openReport_ = new QPushButton(QStringLiteral("查看报告"));
@@ -175,13 +194,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
     connect(watermarkEnabled_, &QCheckBox::toggled, this, [this](bool checked) {
         watermark_->setEnabled(checked && !busy()); schedulePreview();
+        watermarkPosition_->setEnabled(checked && !busy());
     });
+    connect(watermarkPosition_, &QComboBox::currentIndexChanged, this, [this] { schedulePreview(); });
     connect(watermark_, &QLineEdit::textChanged, this, [this] { schedulePreview(); });
     connect(start_, &QPushButton::clicked, this, &MainWindow::startBatch);
     connect(cancel_, &QPushButton::clicked, this, [this] {
         if (cancelled_) cancelled_->store(true);
         cancel_->setEnabled(false);
-        status_->setText(QStringLiteral("正在取消：完成当前图片后停止，已生成的文件会保留。"));
+        status_->setText(QStringLiteral("正在取消：完成已开始处理的图片后停止，已生成文件保留。"));
     });
     connect(openOutput_, &QPushButton::clicked, this, [this] {
         if (!QDir(output_->text()).exists() || output_->text().isEmpty()) {
@@ -220,7 +241,15 @@ Options MainWindow::options() const {
     o.maxEdge = edge_->value(); o.format = format_->currentData().toString();
     o.jpegQuality = quality_->value();
     if (watermarkEnabled_->isChecked()) o.watermark = watermark_->text();
+    o.watermarkPosition = static_cast<WatermarkPosition>(watermarkPosition_->currentIndex());
     return o;
+}
+BatchSettings MainWindow::batchSettings() const {
+    BatchSettings settings;
+    settings.workers = workers_->value();
+    settings.queueCapacity = settings.workers * 2;
+    settings.memoryBudgetBytes = static_cast<quint64>(budget_->value()) * 1024 * 1024;
+    return settings;
 }
 void MainWindow::importFolder() {
     if (busy()) return;
@@ -237,11 +266,13 @@ void MainWindow::importFolder() {
         item->setToolTip(file); item->setData(Qt::UserRole, file);
         table_->setItem(row, 0, item);
         table_->setItem(row, 1, new QTableWidgetItem(QStringLiteral("待处理")));
+        table_->setItem(row, 2, new QTableWidgetItem("—"));
     }
     count_->setText(QStringLiteral("共 %1 张图片").arg(files_.size()));
     start_->setEnabled(!files_.isEmpty());
     progress_->setValue(0);
     report_.clear(); openReport_->setEnabled(false);
+    activeTasks_.clear(); metrics_->setText(QStringLiteral("就绪，可调整并行任务数及批处理预算。"));
     if (error.isEmpty()) {
         output_->setText(QDir(input_->text()).absoluteFilePath("processed"));
         status_->setText(files_.isEmpty() ? QStringLiteral("该文件夹没有支持的图片。")
@@ -254,6 +285,7 @@ void MainWindow::schedulePreview() {
     if (!busy()) previewTimer_.start();
 }
 void MainWindow::beginPreview() {
+    if (property("skipPreview").toBool()) return;
     if (busy() || previewWatcher_.isRunning()) return;
     const int row = table_->currentRow();
     if (row < 0 || row >= files_.size()) return;
@@ -290,10 +322,11 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
     if (!previewBefore_.isNull()) QTimer::singleShot(0, this, [this] { renderPreviews(); });
 }
 void MainWindow::setBusy(bool working) {
-    for (QWidget *w : QList<QWidget *>{input_, output_, edge_, format_, watermarkEnabled_, import_, browse_, outputBrowse_})
+    for (QWidget *w : QList<QWidget *>{input_, output_, edge_, format_, workers_, budget_, watermarkEnabled_, import_, browse_, outputBrowse_})
         w->setEnabled(!working);
     quality_->setEnabled(!working && format_->currentData().toString() == "jpg");
     watermark_->setEnabled(!working && watermarkEnabled_->isChecked());
+    watermarkPosition_->setEnabled(!working && watermarkEnabled_->isChecked());
     start_->setEnabled(!working && !files_.isEmpty()); cancel_->setEnabled(working);
     openOutput_->setEnabled(!working); openReport_->setEnabled(!working && !report_.isEmpty());
 }
@@ -312,42 +345,59 @@ void MainWindow::startBatch() {
     const auto error = validateOptions(o);
     if (!error.isEmpty()) { status_->setText(error); return; }
     report_.clear();
+    activeTasks_.clear();
     progress_->setRange(0, files_.size()); progress_->setValue(0);
     for (int row = 0; row < table_->rowCount(); ++row) {
         table_->item(row, 1)->setText(QStringLiteral("待处理"));
         table_->item(row, 1)->setToolTip({});
+        table_->item(row, 2)->setText("—");
     }
     cancelled_ = std::make_shared<std::atomic_bool>(false);
     thread_ = new QThread(this);
-    auto *worker = new BatchWorker(files_, out, o, cancelled_);
+    auto *worker = new BatchWorker(files_, out, o, cancelled_, batchSettings());
     worker->moveToThread(thread_);
     connect(thread_, &QThread::started, worker, &BatchWorker::run);
     connect(worker, &BatchWorker::progress, this, &MainWindow::updateResult);
+    connect(worker, &BatchWorker::taskStarted, this, [this](int index) {
+        if (index >= 0 && index < table_->rowCount()) {
+            activeTasks_.insert(index);
+            table_->item(index, 1)->setText(QStringLiteral("处理中"));
+        }
+    });
+    connect(worker, &BatchWorker::metrics, this, [this](qint64 elapsed, int active, quint64 reserved, int queued, const QString &json) {
+        metrics_->setText(QStringLiteral("用时 %1 秒  |  工作线程峰值 %2  |  估算预留峰值 %3 MiB  |  排队峰值 %4")
+            .arg(elapsed / 1000.0, 0, 'f', 2).arg(active).arg(reserved / 1048576.0, 0, 'f', 1).arg(queued));
+        metrics_->setToolTip(json);
+    });
     connect(worker, &BatchWorker::finished, this,
             [this](int good, int bad, int cancelled, const QString &report, const QString &reportError) {
         report_ = report;
         status_->setText(QStringLiteral("处理结束：成功 %1，失败 %2，取消 %3。%4")
             .arg(good).arg(bad).arg(cancelled)
-            .arg(reportError.isEmpty() ? QStringLiteral("CSV 报告已保存到输出目录。")
-                                      : QStringLiteral("报告保存失败：") + reportError));
+            .arg(reportError.isEmpty() ? QStringLiteral("CSV 与 JSON 汇总已保存到输出目录。")
+                                      : QStringLiteral("报告或调度异常：") + reportError));
     });
     connect(worker, &BatchWorker::finished, thread_, &QThread::quit);
     connect(worker, &BatchWorker::finished, worker, &QObject::deleteLater);
     connect(thread_, &QThread::finished, this, [this] {
         thread_->deleteLater(); thread_ = nullptr;
-        setBusy(false); emit batchComplete();
+        setBusy(false); schedulePreview(); emit batchComplete();
     });
     setBusy(true);
-    status_->setText(QStringLiteral("正在后台处理图片；可以取消后续任务。"));
+    status_->setText(QStringLiteral("正在并行处理图片；可以取消尚未开始的任务。"));
     thread_->start();
 }
 void MainWindow::updateResult(int done, int total, const FileResult &r) {
     progress_->setMaximum(total); progress_->setValue(done);
-    const int row = files_.indexOf(r.inputPath);
+    const int row = r.index >= 0 ? r.index : files_.indexOf(r.inputPath);
     if (row < 0) return;
+    activeTasks_.remove(row);
     auto *item = table_->item(row, 1);
     item->setText(r.status == "success" ? QStringLiteral("成功") : r.status == "cancelled" ? QStringLiteral("取消") : QStringLiteral("失败"));
     item->setToolTip(r.error.isEmpty() ? r.outputPath : r.error);
+    table_->item(row, 2)->setText(r.status == "success" ? QString::number(r.elapsedMs) : "—");
+    metrics_->setText(QStringLiteral("正在处理 %1  |  等待 %2  |  已完成 %3 / %4")
+        .arg(activeTasks_.size()).arg(std::max(0, total - done - static_cast<int>(activeTasks_.size()))).arg(done).arg(total));
 }
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (busy()) {

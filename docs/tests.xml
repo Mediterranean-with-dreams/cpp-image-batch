@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuite name="ImageBatchTests" timestamp="2026&#x002D;10&#x002D;22T09:17:33" hostname="local-windows-test" tests="27" failures="0" errors="0" skipped="0" time="4.720">
+  <properties>
+    <property name="QTestVersion" value="6.8.3"/>
+    <property name="QtVersion" value="6.8.3"/>
+    <property name="QtBuild" value="Qt 6.8.3 (x86_64&#x002D;little_endian&#x002D;llp64 shared (dynamic) release build; by GCC 13.1.0)"/>
+  </properties>
+  <testcase name="initTestCase" classname="ImageBatchTests" time="0.000"/>
+  <testcase name="defaultsAndValidation" classname="ImageBatchTests" time="0.000"/>
+  <testcase name="scanAndEmptyDirectory" classname="ImageBatchTests" time="0.187"/>
+  <testcase name="proportionalResize" classname="ImageBatchTests" time="0.001"/>
+  <testcase name="formatRoundTrip(jpg)" classname="ImageBatchTests" time="0.019"/>
+  <testcase name="formatRoundTrip(png)" classname="ImageBatchTests" time="0.012"/>
+  <testcase name="formatRoundTrip(bmp)" classname="ImageBatchTests" time="0.012"/>
+  <testcase name="jpegQualityAffectsEncoding" classname="ImageBatchTests" time="0.338"/>
+  <testcase name="watermarkAndTinyImages" classname="ImageBatchTests" time="0.003"/>
+  <testcase name="watermarkCorners(0)" classname="ImageBatchTests" time="0.004"/>
+  <testcase name="watermarkCorners(1)" classname="ImageBatchTests" time="0.004"/>
+  <testcase name="watermarkCorners(2)" classname="ImageBatchTests" time="0.005"/>
+  <testcase name="watermarkCorners(3)" classname="ImageBatchTests" time="0.004"/>
+  <testcase name="exifOrientation" classname="ImageBatchTests" time="0.024"/>
+  <testcase name="failuresAndCollisions" classname="ImageBatchTests" time="0.024"/>
+  <testcase name="reportCsvAndFailure" classname="ImageBatchTests" time="0.017"/>
+  <testcase name="batchContinuesAfterFailure" classname="ImageBatchTests" time="0.024"/>
+  <testcase name="cancellationStopsRemainingFiles" classname="ImageBatchTests" time="0.022"/>
+  <testcase name="batchSettingsAndEstimatedMemory" classname="ImageBatchTests" time="0.493"/>
+  <testcase name="parallelOutputCollisionAndMetrics" classname="ImageBatchTests" time="0.197"/>
+  <testcase name="serialAndParallelProduceIdenticalBytes" classname="ImageBatchTests" time="0.307"/>
+  <testcase name="budgetLimitsAdmissionsAndParallelCancellation" classname="ImageBatchTests" time="0.619"/>
+  <testcase name="callbackFailureIsContained" classname="ImageBatchTests" time="0.026"/>
+  <testcase name="guiImportPreviewAndProcessing" classname="ImageBatchTests" time="1.374"/>
+  <testcase name="guiBrokenPreviewStaysClearedAfterResize" classname="ImageBatchTests" time="0.652"/>
+  <testcase name="guiEmptyInvalidAndCancel" classname="ImageBatchTests" time="0.351"/>
+  <testcase name="cleanupTestCase" classname="ImageBatchTests" time="0.000"/>
+</testsuite>

@@ -1,0 +1,11 @@
+{
+    "all_originals_unchanged": true,
+    "batch_metrics_valid": true,
+    "original_unchanged": true,
+    "parallel_batch_outputs_valid": true,
+    "passed": true,
+    "platform": "windows",
+    "qt_version": "6.8.3",
+    "reason": "Parallel native GUI batch: 3 successful images, 1 corrupt-image failure, CSV/JSON verified and originals unchanged.",
+    "version": "1.1.0"
+}

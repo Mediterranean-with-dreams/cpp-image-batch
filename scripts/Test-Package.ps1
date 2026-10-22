@@ -1,10 +1,10 @@
 param([string]$Archive = '')
 . "$PSScriptRoot\Common.ps1"
-if (-not $Archive) { $Archive = Join-Path $ProjectRoot 'dist\ImageBatch-1.0.0-windows-x64.zip' }
+if (-not $Archive) { $Archive = Join-Path $ProjectRoot "dist\$PackageName.zip" }
 $run = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
 $destination = Join-Path $ProjectRoot "tmp\package-check-$run"
 Expand-Archive -LiteralPath $Archive -DestinationPath $destination
-$package = Join-Path $destination 'ImageBatch-1.0.0-windows-x64'
+$package = Join-Path $destination $PackageName
 $report = Join-Path $destination 'package-check.json'
 $saved = @{}
 foreach ($key in @('PATH', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QTDIR', 'QML_IMPORT_PATH', 'QML2_IMPORT_PATH', 'QT_QPA_PLATFORM')) {

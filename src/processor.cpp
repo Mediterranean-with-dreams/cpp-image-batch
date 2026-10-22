@@ -10,6 +10,7 @@
 #include <QDateTime>
 #include <QTextStream>
 #include <algorithm>
+#include <mutex>
 
 namespace imagebatch {
 QString validateOptions(const Options &o) {
@@ -64,6 +65,11 @@ QImage transformImage(const QImage &input, const Options &o) {
         image = opaque;
     }
     if (!o.watermark.trimmed().isEmpty()) {
+        // Repeated Windows benchmarks found intermittent glyph differences
+        // during parallel painting. Serialize only this short text-paint section;
+        // image decoding, resizing and encoding remain parallel.
+        static std::mutex textPaintingMutex;
+        std::lock_guard<std::mutex> textLock(textPaintingMutex);
         QPainter painter(&image);
         painter.setRenderHint(QPainter::TextAntialiasing);
         QFont font;
@@ -76,10 +82,17 @@ QImage transformImage(const QImage &input, const Options &o) {
             font.setPixelSize(font.pixelSize() - 1);
             painter.setFont(font);
         }
+        int alignment = Qt::AlignBottom | Qt::AlignRight;
+        switch (o.watermarkPosition) {
+        case WatermarkPosition::BottomLeft: alignment = Qt::AlignBottom | Qt::AlignLeft; break;
+        case WatermarkPosition::TopRight: alignment = Qt::AlignTop | Qt::AlignRight; break;
+        case WatermarkPosition::TopLeft: alignment = Qt::AlignTop | Qt::AlignLeft; break;
+        case WatermarkPosition::BottomRight: break;
+        }
         painter.setPen(QColor(0, 0, 0, 200));
-        painter.drawText(area.translated(1, 1), Qt::AlignBottom | Qt::AlignRight, o.watermark);
+        painter.drawText(area.translated(1, 1), alignment, o.watermark);
         painter.setPen(QColor(255, 255, 255, 230));
-        painter.drawText(area, Qt::AlignBottom | Qt::AlignRight, o.watermark);
+        painter.drawText(area, alignment, o.watermark);
     }
     return image;
 }
@@ -143,11 +156,11 @@ QString writeReport(const QList<FileResult> &results, const QString &directory, 
         QTextStream stream(&file);
         stream.setEncoding(QStringConverter::Utf8);
         stream.setGenerateByteOrderMark(true);
-        stream << "input,output,status,error,original_width,original_height,output_width,output_height\n";
+        stream << "input,output,status,error,original_width,original_height,output_width,output_height,elapsed_ms\n";
         for (const auto &r : results)
             stream << csv(r.inputPath) << ',' << csv(r.outputPath) << ',' << csv(r.status) << ','
                    << csv(r.error) << ',' << r.originalSize.width() << ',' << r.originalSize.height()
-                   << ',' << r.outputSize.width() << ',' << r.outputSize.height() << '\n';
+                   << ',' << r.outputSize.width() << ',' << r.outputSize.height() << ',' << r.elapsedMs << '\n';
         stream.flush();
         if (stream.status() != QTextStream::Ok || !file.flush()) {
             if (error) *error = QStringLiteral("报告写入失败：") + file.errorString();

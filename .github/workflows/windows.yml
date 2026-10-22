@@ -11,8 +11,8 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.12'
       - name: Prepare isolated toolchain
@@ -27,10 +27,13 @@ jobs:
       - name: Package
         shell: pwsh
         run: ./scripts/Package.ps1
+      - name: Benchmark correctness smoke test
+        shell: pwsh
+        run: ./scripts/Benchmark.ps1 -Images 6 -Repeats 1
       - name: Verify portable package
         shell: pwsh
         run: ./scripts/Test-Package.ps1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: windows-build-and-test
@@ -39,3 +42,19 @@ jobs:
             dist/*.sha256
             build-windows/evidence/
             tmp/package-check-*/package-check.json
+            build-windows/benchmarks/*/*.json
+            build-windows/benchmarks/*/*.csv
+            build-windows/benchmarks/*/*.md
+  runtime-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Configure standard C++ runtime with sanitizers
+        run: >-
+          cmake -S . -B build-runtime -DIMAGEBATCH_BUILD_APP=OFF -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build and test runtime without Qt
+        run: |
+          cmake --build build-runtime --parallel 2
+          ctest --test-dir build-runtime --output-on-failure

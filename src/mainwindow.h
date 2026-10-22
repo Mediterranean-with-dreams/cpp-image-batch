@@ -3,6 +3,7 @@
 #include <QMainWindow>
 #include <QFutureWatcher>
 #include <QTimer>
+#include <QSet>
 
 class QLineEdit;
 class QSpinBox;
@@ -30,6 +31,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 private:
     Options options() const;
+    BatchSettings batchSettings() const;
     void importFolder();
     void schedulePreview();
     void beginPreview();
@@ -38,11 +40,12 @@ private:
     void setBusy(bool busy);
     void updateResult(int completed, int total, const FileResult &result);
     QLineEdit *input_, *output_, *watermark_;
-    QSpinBox *edge_, *quality_;
-    QComboBox *format_;
+    QSpinBox *edge_, *quality_, *workers_, *budget_;
+    QComboBox *format_, *watermarkPosition_;
     QCheckBox *watermarkEnabled_;
     QTableWidget *table_;
     QLabel *before_, *after_, *beforeInfo_, *afterInfo_, *status_, *count_;
+    QLabel *metrics_;
     QPushButton *start_, *cancel_, *import_, *browse_, *outputBrowse_, *openOutput_, *openReport_;
     QProgressBar *progress_;
     QStringList files_;
@@ -54,5 +57,6 @@ private:
     int previewVersion_ = 0;
     int runningPreviewVersion_ = 0;
     QImage previewBefore_, previewAfter_;
+    QSet<int> activeTasks_;
 };
 }

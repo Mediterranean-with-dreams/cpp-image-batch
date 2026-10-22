@@ -4,6 +4,10 @@
 #include <QCryptographicHash>
 #include <QImageReader>
 #include <QTemporaryDir>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSet>
+#include <QThreadPool>
 
 using namespace imagebatch;
 static QByteArray digest(const QString &path) {
@@ -39,7 +43,7 @@ static QImage scene(int width = 2400, int height = 1600) {
 class ImageBatchTests : public QObject {
     Q_OBJECT
 private slots:
-    void initTestCase() { QImageReader::setAllocationLimit(256); }
+    void initTestCase() { QImageReader::setAllocationLimit(256); QThreadPool::globalInstance()->setMaxThreadCount(1); }
     void defaultsAndValidation() {
         Options o;
         QCOMPARE(o.maxEdge, 1920); QCOMPARE(o.jpegQuality, 90); QVERIFY(validateOptions(o).isEmpty());
@@ -119,6 +123,26 @@ private slots:
         QImage tiny(1, 1, QImage::Format_ARGB32); tiny.fill(Qt::transparent);
         QVERIFY(!transformImage(tiny, o).isNull());
     }
+    void watermarkCorners_data() {
+        QTest::addColumn<int>("position");
+        for (int i = 0; i < 4; ++i) QTest::newRow(qPrintable(QString::number(i))) << i;
+    }
+    void watermarkCorners() {
+        QFETCH(int, position);
+        QImage source(800, 400, QImage::Format_RGB32); source.fill(Qt::black);
+        Options o; o.format = "png"; o.watermark = "CORNER";
+        o.watermarkPosition = static_cast<WatermarkPosition>(position);
+        const auto result = transformImage(source, o);
+        QRect changed;
+        for (int y = 0; y < source.height(); ++y)
+            for (int x = 0; x < source.width(); ++x)
+                if (result.pixel(x, y) != source.pixel(x, y)) changed |= QRect(x, y, 1, 1);
+        QVERIFY(!changed.isEmpty());
+        const bool left = position == 1 || position == 3;
+        const bool top = position == 2 || position == 3;
+        QCOMPARE(changed.center().x() < 400, left);
+        QCOMPARE(changed.center().y() < 200, top);
+    }
     void exifOrientation() {
         QTemporaryDir dir;
         QImage source(80, 40, QImage::Format_RGB32); source.fill(Qt::red);
@@ -186,16 +210,108 @@ private slots:
         QCOMPARE(done.size(), 1); QCOMPARE(done.first()[0].toInt(), 1); QCOMPARE(done.first()[1].toInt(), 0); QCOMPARE(done.first()[2].toInt(), 3);
         QCOMPARE(QDir(dir.filePath("out")).entryList({"*.jpg"}, QDir::Files).size(), 1);
     }
+    void batchSettingsAndEstimatedMemory() {
+        BatchSettings settings;
+        QVERIFY(validateBatchSettings(settings).isEmpty());
+        settings.workers = 0; QVERIFY(!validateBatchSettings(settings).isEmpty());
+        settings.workers = 9; QVERIFY(!validateBatchSettings(settings).isEmpty());
+        settings.workers = 4; settings.queueCapacity = 0; QVERIFY(!validateBatchSettings(settings).isEmpty());
+        settings.queueCapacity = 2; settings.memoryBudgetBytes = 1; QVERIFY(!validateBatchSettings(settings).isEmpty());
+        QTemporaryDir dir;
+        const auto input = dir.filePath("large.png"); QVERIFY(scene(4000, 3000).save(input));
+        Options o;
+        QVERIFY(estimateWorkingBytes(input, o) > 64ULL * 1024 * 1024);
+        settings.memoryBudgetBytes = 64ULL * 1024 * 1024;
+        std::atomic_bool cancelled{false};
+        const auto result = runBatch({input}, dir.filePath("out"), o, settings, cancelled);
+        QCOMPARE(result.failed, 1); QCOMPARE(result.peakReservedBytes, quint64(0));
+        QVERIFY(result.results.first().error.contains(QStringLiteral("预算")));
+        settings.workers = 0;
+        const auto invalid = runBatch({input}, dir.filePath("invalid"), o, settings, cancelled);
+        QCOMPARE(invalid.failed, 1); QVERIFY(!invalid.error.isEmpty());
+    }
+    void parallelOutputCollisionAndMetrics() {
+        QTemporaryDir dir;
+        const QString source = dir.filePath(QStringLiteral("同名 图片.png")); QVERIFY(scene(700, 500).save(source));
+        const auto originalHash = digest(source);
+        QStringList files; for (int i = 0; i < 16; ++i) files << source;
+        Options o; o.format = "png";
+        BatchSettings settings; settings.workers = 4; settings.queueCapacity = 2;
+        std::atomic_bool cancelled{false}; int notifications = 0;
+        BatchCallbacks callbacks;
+        callbacks.completed = [&](int done, int total, const FileResult &) { QCOMPARE(done, ++notifications); QCOMPARE(total, 16); };
+        const auto summary = runBatch(files, dir.filePath("out"), o, settings, cancelled, callbacks);
+        QCOMPARE(summary.succeeded, 16); QCOMPARE(summary.failed, 0); QCOMPARE(notifications, 16);
+        QVERIFY(summary.error.isEmpty()); QVERIFY(summary.peakActive <= 4); QVERIFY(summary.peakQueued <= 2);
+        QVERIFY(summary.peakReservedBytes <= settings.memoryBudgetBytes);
+        QSet<QString> paths;
+        for (int i = 0; i < summary.results.size(); ++i) {
+            const auto &result = summary.results[i]; QCOMPARE(result.index, i);
+            paths.insert(result.outputPath); QVERIFY(!QImage(result.outputPath).isNull());
+        }
+        QCOMPARE(paths.size(), 16); QCOMPARE(digest(source), originalHash);
+        QFile metrics(summary.metricsReport); QVERIFY(metrics.open(QIODevice::ReadOnly));
+        const auto json = QJsonDocument::fromJson(metrics.readAll()).object();
+        QCOMPARE(json.value("success").toInt(), 16); QCOMPARE(json.value("workers").toInt(), 4);
+        QCOMPARE(json.value("peak_queued").toInt(), summary.peakQueued);
+        QCOMPARE(QDir(dir.filePath("out")).entryList({".imagebatch-*"}, QDir::Files | QDir::Hidden).size(), 0);
+    }
+    void serialAndParallelProduceIdenticalBytes() {
+        QTemporaryDir dir; QStringList files;
+        for (int i = 0; i < 6; ++i) {
+            const auto input = dir.filePath(QString::number(i) + ".png"); QVERIFY(scene(900 + i * 10, 600).save(input)); files << input;
+        }
+        Options o; o.maxEdge = 700; o.watermark = "SAME OUTPUT";
+        std::atomic_bool cancelled{false}; BatchSettings settings;
+        const auto serial = runBatch(files, dir.filePath("serial"), o, settings, cancelled);
+        settings.workers = 4;
+        const auto parallel = runBatch(files, dir.filePath("parallel"), o, settings, cancelled);
+        QCOMPARE(serial.succeeded, 6); QCOMPARE(parallel.succeeded, 6);
+        for (int i = 0; i < files.size(); ++i) QCOMPARE(digest(serial.results[i].outputPath), digest(parallel.results[i].outputPath));
+    }
+    void budgetLimitsAdmissionsAndParallelCancellation() {
+        QTemporaryDir dir;
+        const auto input = dir.filePath("input.png"); QVERIFY(scene(1600, 1000).save(input));
+        QStringList files; for (int i = 0; i < 12; ++i) files << input;
+        BatchSettings settings; settings.workers = 4; settings.queueCapacity = 2;
+        settings.memoryBudgetBytes = 64ULL * 1024 * 1024;
+        std::atomic_bool cancelled{false}; Options o;
+        const auto limited = runBatch(files, dir.filePath("limited"), o, settings, cancelled);
+        QCOMPARE(limited.succeeded, 12);
+        QCOMPARE(limited.peakReservedBytes, estimateWorkingBytes(input, o));
+        cancelled.store(true);
+        const auto preCancelled = runBatch(files, dir.filePath("before"), o, settings, cancelled);
+        QCOMPARE(preCancelled.cancelled, 12); QCOMPARE(preCancelled.succeeded, 0);
+        QCOMPARE(preCancelled.peakReservedBytes, quint64(0));
+        cancelled.store(false); settings.memoryBudgetBytes = 512ULL * 1024 * 1024;
+        BatchCallbacks callbacks;
+        callbacks.completed = [&](int, int, const FileResult &) { cancelled.store(true); };
+        const auto during = runBatch(files, dir.filePath("during"), o, settings, cancelled, callbacks);
+        QVERIFY(during.succeeded >= 1 && during.succeeded <= 4);
+        QCOMPARE(during.failed, 0); QCOMPARE(during.succeeded + during.cancelled, 12);
+    }
+    void callbackFailureIsContained() {
+        QTemporaryDir dir;
+        const auto input = dir.filePath("input.png"); QVERIFY(scene(200, 100).save(input));
+        BatchCallbacks callbacks;
+        callbacks.completed = [](int, int, const FileResult &) { throw std::runtime_error("observer failure"); };
+        std::atomic_bool cancelled{false};
+        const auto summary = runBatch({input}, dir.filePath("out"), Options{}, BatchSettings{}, cancelled, callbacks);
+        QCOMPARE(summary.succeeded, 1); QVERIFY(summary.error.contains(QStringLiteral("通知异常")));
+        QVERIFY(QFileInfo::exists(summary.metricsReport));
+    }
     void guiImportPreviewAndProcessing() {
         QTemporaryDir dir;
         const QString input = dir.filePath(QStringLiteral("中文图片 space")); QVERIFY(QDir().mkpath(input));
         const QString sample = QDir(input).filePath(QStringLiteral("山间旅行.png")); QVERIFY(scene().save(sample));
+        QVERIFY(scene(1200, 1800).save(QDir(input).filePath(QStringLiteral("示例_竖图.png"))));
+        QVERIFY(scene(1800, 1200).save(QDir(input).filePath(QStringLiteral("示例_照片.jpg"))));
         const auto hash = digest(sample);
         MainWindow window; window.show();
         QSignalSpy preview(&window, &MainWindow::previewReady), done(&window, &MainWindow::batchComplete);
         window.findChild<QLineEdit *>("inputPath")->setText(input);
         QTest::mouseClick(window.findChild<QPushButton *>("importButton"), Qt::LeftButton);
-        QCOMPARE(window.findChild<QTableWidget *>("fileTable")->rowCount(), 1);
+        QCOMPARE(window.findChild<QTableWidget *>("fileTable")->rowCount(), 3);
         window.findChild<QSpinBox *>("maxEdge")->setValue(1200);
         window.findChild<QComboBox *>("outputFormat")->setCurrentIndex(1);
         window.findChild<QCheckBox *>("watermarkEnabled")->setChecked(true);
@@ -209,7 +325,7 @@ private slots:
         const QString out = QDir(input).filePath("processed/山间旅行_processed.png");
         QVERIFY(QFileInfo::exists(out)); QCOMPARE(QImage(out).size(), QSize(1200, 800));
         QCOMPARE(digest(sample), hash);
-        QVERIFY(window.findChild<QLabel *>("statusText")->text().contains(QStringLiteral("成功 1，失败 0")));
+        QVERIFY(window.findChild<QLabel *>("statusText")->text().contains(QStringLiteral("成功 3，失败 0")));
         const QString artifacts = qEnvironmentVariable("IMAGEBATCH_ARTIFACT_DIR");
         if (!artifacts.isEmpty()) {
             QVERIFY(QDir().mkpath(artifacts));

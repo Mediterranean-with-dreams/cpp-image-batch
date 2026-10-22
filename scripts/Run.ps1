@@ -1,5 +1,5 @@
 . "$PSScriptRoot\Common.ps1"
-$package = Join-Path $ProjectRoot 'dist\ImageBatch-1.0.0-windows-x64\ImageBatch.exe'
+$package = Join-Path $ProjectRoot "dist\$PackageName\ImageBatch.exe"
 if (Test-Path -LiteralPath $package) { Start-Process -FilePath $package; return }
 $context = Get-DevContext
 Assert-DevContext $context

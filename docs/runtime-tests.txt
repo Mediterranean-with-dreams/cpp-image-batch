@@ -1,0 +1,9 @@
+PASS invalid constructor arguments
+PASS future results, move-only jobs and exception transport
+PASS four workers really overlap
+PASS bounded queue applies producer backpressure
+PASS draining destructor joins accepted jobs
+PASS multiple producers, exactly-once completion
+PASS budget waits, releases and cancels
+PASS RAII lease moves and exception safety
+8 passed, 0 failed

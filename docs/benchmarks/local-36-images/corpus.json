@@ -1,0 +1,218 @@
+[
+    {
+        "file": "sample_000.jpg",
+        "height": 1440,
+        "sha256": "489a32e3bb0aa00ad1f458aaed7667d8642b8ba1f8d98c54f266293822d15900",
+        "width": 2560
+    },
+    {
+        "file": "sample_001.png",
+        "height": 1600,
+        "sha256": "88448677fc65e439685cf6f6af6a37118e0496171ff0f2a874ef8372e8ef2e00",
+        "width": 2400
+    },
+    {
+        "file": "sample_002.jpg",
+        "height": 2400,
+        "sha256": "c8544e72d2dc73c1e2e9820594c894f75870c350891ed20b394d41b27a4ebc6a",
+        "width": 1600
+    },
+    {
+        "file": "sample_003.jpg",
+        "height": 1440,
+        "sha256": "a29b47ec3f75050afcdcc78b8b7c769a9c1bb7accde9c5a92189e45382bfcf93",
+        "width": 2560
+    },
+    {
+        "file": "sample_004.png",
+        "height": 1600,
+        "sha256": "8a6738cdfbb68d7f98d0ac4cd5d3d9e452d8b85124a73104068e26db38577770",
+        "width": 2400
+    },
+    {
+        "file": "sample_005.jpg",
+        "height": 2400,
+        "sha256": "b853badf568296871d69ac01557a5ed005cca31156d07bf912807ba22cd95254",
+        "width": 1600
+    },
+    {
+        "file": "sample_006.jpg",
+        "height": 1440,
+        "sha256": "54015ce868732e98061427272a2469b4643f75b2be90726e1addcb2cbb57e5ee",
+        "width": 2560
+    },
+    {
+        "file": "sample_007.png",
+        "height": 1600,
+        "sha256": "2375a1174165510d6577a8702ac7b140176fca61564b988e7f89ec6ddd3064bf",
+        "width": 2400
+    },
+    {
+        "file": "sample_008.jpg",
+        "height": 2400,
+        "sha256": "dc3488b81105982a4da8439fcbbd84b9de50d511dd9e89e5ab3f5d9652c37726",
+        "width": 1600
+    },
+    {
+        "file": "sample_009.jpg",
+        "height": 1440,
+        "sha256": "08db903a77c8ecec36af35839377ad24370e786e2b0a3ac6d32bae3de2d121e4",
+        "width": 2560
+    },
+    {
+        "file": "sample_010.png",
+        "height": 1600,
+        "sha256": "51060b086172185c3f3363959fbc43fad6f2a3d39b1904bb7cf864090345514c",
+        "width": 2400
+    },
+    {
+        "file": "sample_011.jpg",
+        "height": 2400,
+        "sha256": "fa9350efd66c0b05b2668266a4935d2f7138d6b49464c47f9d6626e9ebefd44a",
+        "width": 1600
+    },
+    {
+        "file": "sample_012.jpg",
+        "height": 1440,
+        "sha256": "23b1c210bc5e0135f187d78ed6ef636b9c7d2b981c176b20a7f85874f33452e4",
+        "width": 2560
+    },
+    {
+        "file": "sample_013.png",
+        "height": 1600,
+        "sha256": "8b25ba30e3d55d49155d638278d156f016cde278cd49f6e29caa86f7d5d8b3d5",
+        "width": 2400
+    },
+    {
+        "file": "sample_014.jpg",
+        "height": 2400,
+        "sha256": "6f8643706c5998c809a84dac988768e5c0cdd9be7ffbc91b74af90d496c68067",
+        "width": 1600
+    },
+    {
+        "file": "sample_015.jpg",
+        "height": 1440,
+        "sha256": "bc93c184865d9f6e03adb7491103ae69cb9c88d42f46e6e9d52f0f70022a8271",
+        "width": 2560
+    },
+    {
+        "file": "sample_016.png",
+        "height": 1600,
+        "sha256": "81f3024146bee00d39641fab9117d4feb7502c22ddd5dd8ea768dfb84d24b12b",
+        "width": 2400
+    },
+    {
+        "file": "sample_017.jpg",
+        "height": 2400,
+        "sha256": "d0ed0b814d44eae559062fb7ca1a4257abbbf99fd000e9d428d2ce5ce8b80930",
+        "width": 1600
+    },
+    {
+        "file": "sample_018.jpg",
+        "height": 1440,
+        "sha256": "236d7c342f5bdf2a41431903f40eb362ca40e876bc90d0702a5d1a16999a139c",
+        "width": 2560
+    },
+    {
+        "file": "sample_019.png",
+        "height": 1600,
+        "sha256": "7ce68cf72678cc0189f7379a45b1133194b0cb5d554600a566b758b0d4222f4e",
+        "width": 2400
+    },
+    {
+        "file": "sample_020.jpg",
+        "height": 2400,
+        "sha256": "c10b28ebaf80c7addc2d869175802e28bca158f9abde244f375738d4c49d5ea3",
+        "width": 1600
+    },
+    {
+        "file": "sample_021.jpg",
+        "height": 1440,
+        "sha256": "97992bb676ff55cab7eb369ffed1ecc35b4408b0e809f80edd477c00332a0b60",
+        "width": 2560
+    },
+    {
+        "file": "sample_022.png",
+        "height": 1600,
+        "sha256": "fc8746bb71c345dcdccfbb0489360ae8c77462cfe9be4f5b30aa26f36603f795",
+        "width": 2400
+    },
+    {
+        "file": "sample_023.jpg",
+        "height": 2400,
+        "sha256": "0c4b5708d052c2d0decb1840c8b008af0c56016613b5ed27542123040fecd521",
+        "width": 1600
+    },
+    {
+        "file": "sample_024.jpg",
+        "height": 1440,
+        "sha256": "46fde9fe17dda71a083e4cdffa5efc0efb1d462f408ef1319da720f65518fd35",
+        "width": 2560
+    },
+    {
+        "file": "sample_025.png",
+        "height": 1600,
+        "sha256": "c4f820fef801950be8b2811098c130fbe1b9034fd51059567f91475a2db225a5",
+        "width": 2400
+    },
+    {
+        "file": "sample_026.jpg",
+        "height": 2400,
+        "sha256": "a82973c141c665559fbf1035229251d375c30959aa7e48e1c4182f1528d6451b",
+        "width": 1600
+    },
+    {
+        "file": "sample_027.jpg",
+        "height": 1440,
+        "sha256": "63d5c8986f84f266ac691e23d26036ec04ffee0a963a84bb637ffc0a4e50349f",
+        "width": 2560
+    },
+    {
+        "file": "sample_028.png",
+        "height": 1600,
+        "sha256": "18be10a010a58a0bb04c23532f3ba5d3832871d43fa2eb507bfe6fed530f9b8e",
+        "width": 2400
+    },
+    {
+        "file": "sample_029.jpg",
+        "height": 2400,
+        "sha256": "cf73d290701cbff03ff775afd15fb5e2a75dd7dc961b982d1f31398d7d54016d",
+        "width": 1600
+    },
+    {
+        "file": "sample_030.jpg",
+        "height": 1440,
+        "sha256": "5708a08ccad7351aea06cd9d3653e6c14fca594a43ae1262ffeadfdb57725a23",
+        "width": 2560
+    },
+    {
+        "file": "sample_031.png",
+        "height": 1600,
+        "sha256": "4e281bfb8292cde674fbcb6f1c2fc0d7220935425c82c93a277a86c93117113b",
+        "width": 2400
+    },
+    {
+        "file": "sample_032.jpg",
+        "height": 2400,
+        "sha256": "daa3932d1881927686b6a5b109543880e2c7909533418728dffc8e5b73319124",
+        "width": 1600
+    },
+    {
+        "file": "sample_033.jpg",
+        "height": 1440,
+        "sha256": "b927b872eafa228d7ce5f9ddec94982f28005e9c755ebd47224ee3091a40b4aa",
+        "width": 2560
+    },
+    {
+        "file": "sample_034.png",
+        "height": 1600,
+        "sha256": "f137ddedbadb70fff25835a1d5bef278200e7bbd28826ac61cce0b35006421df",
+        "width": 2400
+    },
+    {
+        "file": "sample_035.jpg",
+        "height": 2400,
+        "sha256": "8dc77da1c96a0ff4cd81d3196364fb01d8d54400e8c9805518150cd062271b5f",
+        "width": 1600
+    }
+]

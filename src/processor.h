@@ -4,11 +4,13 @@
 #include <QMetaType>
 
 namespace imagebatch {
+enum class WatermarkPosition { BottomRight, BottomLeft, TopRight, TopLeft };
 struct Options {
     int maxEdge = 1920; // 0 means keep original dimensions.
     QString format = "jpg";
     int jpegQuality = 90;
     QString watermark;
+    WatermarkPosition watermarkPosition = WatermarkPosition::BottomRight;
 };
 struct FileResult {
     QString inputPath;
@@ -17,6 +19,8 @@ struct FileResult {
     QString error;
     QSize originalSize;
     QSize outputSize;
+    int index = -1;
+    qint64 elapsedMs = 0;
 };
 QString validateOptions(const Options &options);
 QStringList scanImages(const QString &directory, QString *error = nullptr);

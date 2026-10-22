@@ -15,6 +15,8 @@ try {
     $testExit = $LASTEXITCODE
     Get-Content -LiteralPath "$artifacts\tests.txt" -Encoding UTF8
     if ($testExit -ne 0) { throw "Qt Test failed. Evidence: $artifacts" }
+    & "$($context.Build)\runtime_tests.exe" | Tee-Object -FilePath "$artifacts\runtime-tests.txt"
+    if ($LASTEXITCODE -ne 0) { throw 'C++ runtime tests failed.' }
     Remove-Item Env:IMAGEBATCH_ARTIFACT_DIR -ErrorAction SilentlyContinue
     & $context.CTest --test-dir $context.Build --output-on-failure
     if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
