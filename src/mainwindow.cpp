@@ -6,8 +6,19 @@
 #include <QUrl>
 #include <QBuffer>
 #include <QImageWriter>
+#include <exception>
 
 namespace imagebatch {
+static QString sizeLabel(qint64 bytes) {
+    if (bytes < 1024) return QString::number(bytes) + " B";
+    if (bytes < 1024 * 1024) return QString::number(bytes / 1024.0, 'f', 1) + " KiB";
+    return QString::number(bytes / 1048576.0, 'f', 2) + " MiB";
+}
+static QString colorLabel(ColorMode mode) {
+    if (mode == ColorMode::Grayscale) return QStringLiteral("单通道灰度");
+    if (mode == ColorMode::GrayscaleRgb) return QStringLiteral("RGB 三通道灰度");
+    return QStringLiteral("保留彩色");
+}
 MainWindow::MainWindow(QWidget *parent, const QString &settingsFile) : QMainWindow(parent), settingsFile_(settingsFile) {
     qRegisterMetaType<FileResult>();
     setWindowTitle(QStringLiteral("ImageBatch %1 · 图片批处理工具").arg(IMAGEBATCH_VERSION));
@@ -32,7 +43,7 @@ MainWindow::MainWindow(QWidget *parent, const QString &settingsFile) : QMainWind
     auto *title = new QLabel(QStringLiteral("ImageBatch  图片批处理"));
     title->setObjectName("title");
     root->addWidget(title);
-    root->addWidget(new QLabel(QStringLiteral("缩放 · 格式转换 · 四角水印 · 可控并行    |    本地处理，保留原图")));
+    root->addWidget(new QLabel(QStringLiteral("缩放 · 灰度 · 图片压缩 · 文字水印    |    本地处理，保留原图")));
 
     auto *folderBox = new QGroupBox(QStringLiteral("01  导入与保存位置"));
     auto *folders = new QGridLayout(folderBox);
@@ -110,6 +121,18 @@ MainWindow::MainWindow(QWidget *parent, const QString &settingsFile) : QMainWind
     format_->addItem(QStringLiteral("保持原格式"), "original");
     quality_ = new QSpinBox;
     quality_->setObjectName("jpegQuality"); quality_->setRange(1, 100); quality_->setValue(90);
+    edge_->setToolTip(QStringLiteral("宽和高中较大的值。4000×3000 设为 1920 后输出 1920×1440；0 保持尺寸，小图不放大。"));
+    quality_->setToolTip(QStringLiteral("JPG 有损编码质量，1～100，不是画质百分比。越高通常细节越好、文件越大；对 PNG / BMP 不生效。"));
+    colorMode_ = new QComboBox; colorMode_->setObjectName("colorMode");
+    colorMode_->addItem(QStringLiteral("保留彩色"), 0);
+    colorMode_->addItem(QStringLiteral("灰度 · 单通道（建议 PNG）"), 1);
+    colorMode_->addItem(QStringLiteral("灰度 · RGB 三通道"), 2);
+    targetSize_ = new QSpinBox; targetSize_->setObjectName("jpegTargetSize"); targetSize_->setRange(0, 102400);
+    targetSize_->setSpecialValueText(QStringLiteral("不限制")); targetSize_->setSuffix(" KiB"); targetSize_->setSingleStep(50);
+    pngCompression_ = new QComboBox; pngCompression_->setObjectName("pngCompression");
+    pngCompression_->addItem(QStringLiteral("快速 · 无损"), 0);
+    pngCompression_->addItem(QStringLiteral("均衡 · 无损"), 50);
+    pngCompression_->addItem(QStringLiteral("更小 · 无损"), 100); pngCompression_->setCurrentIndex(1);
     watermarkEnabled_ = new QCheckBox(QStringLiteral("启用文字水印"));
     watermarkEnabled_->setObjectName("watermarkEnabled");
     watermark_ = new QLineEdit;
@@ -132,23 +155,49 @@ MainWindow::MainWindow(QWidget *parent, const QString &settingsFile) : QMainWind
     settings->addWidget(format_, 0, 3);
     settings->addWidget(new QLabel(QStringLiteral("JPEG 质量")), 1, 0);
     settings->addWidget(quality_, 1, 1);
-    settings->addWidget(new QLabel(QStringLiteral("等比例缩小，不放大小图")), 1, 2, 1, 2);
-    settings->addWidget(watermarkEnabled_, 2, 0);
-    settings->addWidget(watermarkPosition_, 2, 1);
-    settings->addWidget(watermark_, 2, 2, 1, 2);
-    settings->addWidget(new QLabel(QStringLiteral("并行任务")), 3, 0);
-    settings->addWidget(workers_, 3, 1);
-    settings->addWidget(new QLabel(QStringLiteral("批处理预算")), 3, 2);
-    settings->addWidget(budget_, 3, 3);
-    auto *hint = new QLabel(QStringLiteral("PNG 保留透明度；JPG / BMP 使用白底。预算用于估算批处理缓冲。"));
+    settings->addWidget(new QLabel(QStringLiteral("JPG 有损压缩质量")), 1, 2, 1, 2);
+    auto *parameterHelp = new QLabel(QStringLiteral(
+        "最长边＝宽和高中较大的值。例：4000×3000 设 1920 → 1920×1440；0 保持尺寸，小图不放大。\n"
+        "JPEG 质量为 1～100，不是画质百分比；越高通常越清晰、文件越大。仅对 JPG 生效。"));
+    parameterHelp->setObjectName("parameterHelp"); parameterHelp->setWordWrap(true);
+    parameterHelp->setStyleSheet("font-size:12px;color:#50657d;");
+    settings->addWidget(parameterHelp, 2, 0, 1, 4);
+    settings->addWidget(new QLabel(QStringLiteral("颜色处理")), 3, 0); settings->addWidget(colorMode_, 3, 1, 1, 3);
+    auto *grayHelp = new QLabel(QStringLiteral("灰度会将透明区转白。训练建议用 PNG 并关闭水印，通道数应与模型输入要求一致。"));
+    grayHelp->setObjectName("grayscaleHelp"); grayHelp->setWordWrap(true); grayHelp->setStyleSheet("font-size:12px;color:#50657d;");
+    settings->addWidget(grayHelp, 4, 0, 1, 4);
+    settings->addWidget(new QLabel(QStringLiteral("JPG 大小上限")), 5, 0); settings->addWidget(targetSize_, 5, 1);
+    settings->addWidget(new QLabel(QStringLiteral("PNG 压缩")), 5, 2); settings->addWidget(pngCompression_, 5, 3);
+    compressionHelp_ = new QLabel; compressionHelp_->setObjectName("compressionHelp"); compressionHelp_->setWordWrap(true);
+    compressionHelp_->setStyleSheet("font-size:12px;color:#50657d;"); settings->addWidget(compressionHelp_, 6, 0, 1, 4);
+    settings->addWidget(watermarkEnabled_, 7, 0); settings->addWidget(watermarkPosition_, 7, 1);
+    settings->addWidget(watermark_, 7, 2, 1, 2);
+    settings->addWidget(new QLabel(QStringLiteral("并行任务")), 8, 0); settings->addWidget(workers_, 8, 1);
+    settings->addWidget(new QLabel(QStringLiteral("批处理预算")), 8, 2); settings->addWidget(budget_, 8, 3);
+    auto *hint = new QLabel(QStringLiteral("保留彩色时 PNG 保留透明度；JPG / BMP 使用白底。预算用于估算批处理缓冲。"));
     hint->setWordWrap(true); hint->setObjectName("hint");
-    settings->addWidget(hint, 4, 0, 1, 4);
+    settings->addWidget(hint, 9, 0, 1, 4);
     auto *reset = new QPushButton(QStringLiteral("恢复默认参数")); reset->setObjectName("resetOptionsButton");
-    settings->addWidget(reset, 5, 2, 1, 2);
+    auto *presets = new QHBoxLayout;
+    auto *training = new QPushButton(QStringLiteral("训练灰度 PNG")); training->setObjectName("trainingPresetButton");
+    auto *photo = new QPushButton(QStringLiteral("照片压缩")); photo->setObjectName("photoPresetButton");
+    presets->addWidget(training); presets->addWidget(photo); presets->addWidget(reset);
+    settings->addLayout(presets, 10, 0, 1, 4);
+    connect(training, &QPushButton::clicked, this, [this] {
+        format_->setCurrentIndex(1); colorMode_->setCurrentIndex(1); edge_->setValue(0);
+        targetSize_->setValue(0); pngCompression_->setCurrentIndex(1); watermarkEnabled_->setChecked(false);
+        status_->setText(QStringLiteral("已应用训练灰度 PNG：单通道、保持尺寸、关闭水印。请确认模型需要的通道数。"));
+    });
+    connect(photo, &QPushButton::clicked, this, [this] {
+        format_->setCurrentIndex(0); colorMode_->setCurrentIndex(0); edge_->setValue(1920);
+        quality_->setValue(85); targetSize_->setValue(0); watermarkEnabled_->setChecked(false);
+        status_->setText(QStringLiteral("已应用照片压缩：JPG、最长边 1920、质量 85、关闭水印。可继续设置大小上限。"));
+    });
     connect(reset, &QPushButton::clicked, this, [this] {
         edge_->setValue(1920); quality_->setValue(90); format_->setCurrentIndex(0);
         workers_->setValue(2); budget_->setValue(512); watermarkEnabled_->setChecked(false);
         watermark_->clear(); watermarkPosition_->setCurrentIndex(0);
+        colorMode_->setCurrentIndex(0); targetSize_->setValue(0); pngCompression_->setCurrentIndex(1);
     });
     right->addWidget(optionBox);
 
@@ -165,8 +214,9 @@ MainWindow::MainWindow(QWidget *parent, const QString &settingsFile) : QMainWind
     }
     beforeInfo_ = new QLabel(QStringLiteral("原图"));
     afterInfo_ = new QLabel(QStringLiteral("处理效果"));
+    beforeInfo_->setObjectName("beforeInfo"); afterInfo_->setObjectName("afterInfo");
     beforeInfo_->setAlignment(Qt::AlignCenter); afterInfo_->setAlignment(Qt::AlignCenter);
-    beforeInfo_->setFixedHeight(25); afterInfo_->setFixedHeight(25);
+    beforeInfo_->setFixedHeight(44); afterInfo_->setFixedHeight(44);
     previews->addWidget(before_, 0, 0); previews->addWidget(after_, 0, 1);
     previews->addWidget(beforeInfo_, 1, 0); previews->addWidget(afterInfo_, 1, 1);
     previews->setColumnStretch(0, 1); previews->setColumnStretch(1, 1);
@@ -261,8 +311,11 @@ MainWindow::MainWindow(QWidget *parent, const QString &settingsFile) : QMainWind
     connect(table_, &QTableWidget::currentCellChanged, this, [this] { showDetails(); schedulePreview(); });
     connect(edge_, &QSpinBox::valueChanged, this, [this] { schedulePreview(); });
     connect(quality_, &QSpinBox::valueChanged, this, [this] { schedulePreview(); });
+    connect(targetSize_, &QSpinBox::valueChanged, this, [this] { schedulePreview(); });
+    connect(pngCompression_, &QComboBox::currentIndexChanged, this, [this] { schedulePreview(); });
+    connect(colorMode_, &QComboBox::currentIndexChanged, this, [this] { schedulePreview(); });
     connect(format_, &QComboBox::currentIndexChanged, this, [this] {
-        quality_->setEnabled(!busy() && (format_->currentData().toString() == "jpg" || format_->currentData().toString() == "original")); schedulePreview();
+        updateFormatControls(); schedulePreview();
     });
     connect(watermarkEnabled_, &QCheckBox::toggled, this, [this](bool checked) {
         watermark_->setEnabled(checked && !busy()); schedulePreview();
@@ -289,20 +342,31 @@ MainWindow::MainWindow(QWidget *parent, const QString &settingsFile) : QMainWind
     connect(&previewTimer_, &QTimer::timeout, this, &MainWindow::beginPreview);
     connect(&previewWatcher_, &QFutureWatcher<Preview>::finished, this, [this] {
         if (runningPreviewVersion_ != previewVersion_) { previewTimer_.start(); return; }
-        const auto p = previewWatcher_.result();
+        Preview p;
+        try { p = previewWatcher_.result(); }
+        catch (const std::exception &e) { p.error = QStringLiteral("预览异常：") + QString::fromUtf8(e.what()); }
+        catch (...) { p.error = QStringLiteral("预览异常，请尝试缩小图片或调整参数。"); }
         if (!p.error.isEmpty()) {
-            previewBefore_ = {}; previewAfter_ = {};
-            before_->setText(QStringLiteral("无法读取图片")); after_->setText(p.error);
-            beforeInfo_->setText(QStringLiteral("原图")); afterInfo_->setText(QStringLiteral("预览失败"));
+            previewBefore_ = p.before; previewAfter_ = {};
+            if (previewBefore_.isNull()) before_->setText(QStringLiteral("无法读取图片")); else renderPreviews();
+            after_->setText(p.error); after_->setWordWrap(true);
+            beforeInfo_->setText(p.inputSize.isValid() ? QStringLiteral("原图 %1 × %2\n%3").arg(p.inputSize.width()).arg(p.inputSize.height()).arg(sizeLabel(p.inputBytes)) : QStringLiteral("原图"));
+            afterInfo_->setText(QStringLiteral("预览失败，请调整参数"));
+            afterInfo_->setToolTip({});
         } else {
             previewBefore_ = p.before; previewAfter_ = p.after;
             renderPreviews();
-            beforeInfo_->setText(QStringLiteral("原图  %1 × %2").arg(p.inputSize.width()).arg(p.inputSize.height()));
-            afterInfo_->setText(QStringLiteral("输出  %1 × %2  ·  %3").arg(p.outputSize.width()).arg(p.outputSize.height()).arg(p.format.toUpper()));
+            beforeInfo_->setText(QStringLiteral("原图 %1 × %2\n%3").arg(p.inputSize.width()).arg(p.inputSize.height()).arg(sizeLabel(p.inputBytes)));
+            afterInfo_->setText(QStringLiteral("输出 %1 × %2 · %3\n预计 %4%5")
+                .arg(p.outputSize.width()).arg(p.outputSize.height()).arg(p.format.toUpper()).arg(sizeLabel(p.outputBytes))
+                .arg(p.jpegQualityUsed > 0 ? QStringLiteral(" · 质量 %1").arg(p.jpegQualityUsed) : QString()));
+            afterInfo_->setToolTip(QStringLiteral("预计编码后：%1 字节%2").arg(p.outputBytes)
+                .arg(p.jpegQualityUsed > 0 ? QStringLiteral("；JPEG 实际质量：%1").arg(p.jpegQualityUsed) : QString()));
         }
         emit previewReady();
     });
     restorePreferences();
+    updateFormatControls();
     refreshSelection();
     // File drops belong to the importer, including drops over editable fields.
     for (auto *widget : findChildren<QWidget *>()) widget->setAcceptDrops(false);
@@ -318,6 +382,8 @@ Options MainWindow::options() const {
     Options o;
     o.maxEdge = edge_->value(); o.format = format_->currentData().toString();
     o.jpegQuality = quality_->value();
+    o.jpegTargetKiB = targetSize_->value(); o.pngCompression = pngCompression_->currentData().toInt();
+    o.colorMode = static_cast<ColorMode>(colorMode_->currentIndex());
     if (watermarkEnabled_->isChecked()) o.watermark = watermark_->text();
     o.watermarkPosition = static_cast<WatermarkPosition>(watermarkPosition_->currentIndex());
     return o;
@@ -348,6 +414,7 @@ void MainWindow::clearFiles() {
     previewBefore_ = {}; previewAfter_ = {};
     before_->setText(QStringLiteral("请选择图片")); after_->setText(QStringLiteral("暂无预览"));
     beforeInfo_->setText(QStringLiteral("原图")); afterInfo_->setText(QStringLiteral("处理效果"));
+    afterInfo_->setToolTip({});
     details_->setPlainText(QStringLiteral("点击图片查看路径和处理详情。"));
     report_.clear(); openReport_->setEnabled(false); activeTasks_.clear();
     progress_->setRange(0, 100); progress_->setValue(0);
@@ -420,6 +487,15 @@ void MainWindow::showDetails() {
     const auto &result = results_[row];
     QString text = QStringLiteral("输入：") + files_[row];
     if (!result.outputPath.isEmpty()) text += QStringLiteral("\n输出：") + result.outputPath;
+    if (result.inputBytes > 0) text += QStringLiteral("\n原文件：") + sizeLabel(result.inputBytes);
+    if (result.outputBytes > 0) {
+        text += QStringLiteral("\n处理后：") + sizeLabel(result.outputBytes);
+        if (result.inputBytes > 0) text += QStringLiteral("（%1%2%）")
+            .arg(result.outputBytes <= result.inputBytes ? QStringLiteral("缩小 ") : QStringLiteral("增大 "))
+            .arg(qAbs(result.outputBytes - result.inputBytes) * 100.0 / result.inputBytes, 0, 'f', 1);
+        text += QStringLiteral("\n颜色：") + colorLabel(result.colorMode);
+        if (result.jpegQualityUsed > 0) text += QStringLiteral("；JPEG 实际质量：%1").arg(result.jpegQualityUsed);
+    }
     if (!result.error.isEmpty()) text += QStringLiteral("\n原因：") + result.error;
     details_->setPlainText(text);
 }
@@ -439,6 +515,9 @@ void MainWindow::restorePreferences() {
     if (settingsFile_.isEmpty()) return;
     const auto p = readPreferences(settingsFile_);
     edge_->setValue(p.options.maxEdge); quality_->setValue(p.options.jpegQuality);
+    targetSize_->setValue(p.options.jpegTargetKiB); colorMode_->setCurrentIndex(static_cast<int>(p.options.colorMode));
+    const int compressionIndex = pngCompression_->findData(p.options.pngCompression);
+    pngCompression_->setCurrentIndex(compressionIndex >= 0 ? compressionIndex : 1);
     format_->setCurrentIndex(format_->findData(p.options.format));
     watermark_->setText(p.options.watermark); watermarkEnabled_->setChecked(p.watermarkEnabled);
     watermarkPosition_->setCurrentIndex(static_cast<int>(p.options.watermarkPosition));
@@ -451,6 +530,19 @@ void MainWindow::savePreferences() {
     p.watermarkEnabled = watermarkEnabled_->isChecked(); p.batch = batchSettings(); p.lastFolder = input_->text();
     QString error;
     if (!writePreferences(settingsFile_, p, &error)) status_->setText(error + QStringLiteral("；本次图片处理结果不受影响。"));
+}
+void MainWindow::updateFormatControls() {
+    const auto format = format_->currentData().toString();
+    const bool jpeg = format == "jpg" || format == "original";
+    const bool png = format == "png" || format == "original";
+    quality_->setEnabled(!busy() && jpeg); targetSize_->setEnabled(!busy() && jpeg);
+    pngCompression_->setEnabled(!busy() && png);
+    QString text;
+    if (format == "png") text = QStringLiteral("PNG 各档位均无损；“更小”可能更慢。已压缩的图片重新保存后不保证更小。");
+    else if (format == "bmp") text = QStringLiteral("BMP 通常较大。需要压缩体积可选 JPG；需要保留透明度可选 PNG。");
+    else text = QStringLiteral("JPG 上限为 0 时按所选质量保存；设置上限后自动调低质量，尺寸不变。达不到时请降低最长边。1 KiB＝1024 字节。");
+    if (format == "original") text += QStringLiteral(" PNG 项仅使用 PNG 无损压缩设置。");
+    compressionHelp_->setText(text);
 }
 void MainWindow::schedulePreview() {
     ++previewVersion_;
@@ -471,17 +563,16 @@ void MainWindow::beginPreview() {
         p.format = effective.format;
         QImage original = loadImage(file, &p.error);
         if (original.isNull()) return p;
+        p.inputSize = original.size(); p.inputBytes = QFileInfo(file).size(); p.colorMode = o.colorMode;
+        p.before = original.scaled(800, 600, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         QImage transformed = transformImage(original, effective);
         if (transformed.isNull()) { p.error = QStringLiteral("无法生成预览"); return p; }
-        if (effective.format == "jpg") {
-            QByteArray encoded;
-            QBuffer buffer(&encoded); buffer.open(QIODevice::WriteOnly);
-            QImageWriter writer(&buffer, "jpg"); writer.setQuality(o.jpegQuality);
-            if (!writer.write(transformed)) { p.error = writer.errorString(); return p; }
-            transformed = QImage::fromData(encoded, "jpg");
-        }
-        p.inputSize = original.size(); p.outputSize = transformed.size();
-        p.before = original.scaled(800, 600, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        const auto encoded = encodeImage(transformed, effective);
+        if (!encoded.error.isEmpty()) { p.error = encoded.error; return p; }
+        p.outputBytes = encoded.data.size(); p.jpegQualityUsed = encoded.jpegQualityUsed;
+        transformed = QImage::fromData(encoded.data, effective.format.toLatin1());
+        if (transformed.isNull()) { p.error = QStringLiteral("无法读取编码后的预览"); return p; }
+        p.outputSize = transformed.size();
         p.after = transformed.scaled(800, 600, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         return p;
     }));
@@ -498,10 +589,12 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
     if (!previewBefore_.isNull()) QTimer::singleShot(0, this, [this] { renderPreviews(); });
 }
 void MainWindow::setBusy(bool working) {
-    for (QWidget *w : QList<QWidget *>{input_, output_, edge_, format_, workers_, budget_, watermarkEnabled_, import_, browse_, outputBrowse_, addFiles_, selectAll_, selectNone_, table_})
+    for (QWidget *w : QList<QWidget *>{input_, output_, edge_, format_, colorMode_, workers_, budget_, watermarkEnabled_, import_, browse_, outputBrowse_, addFiles_, selectAll_, selectNone_, table_})
         w->setEnabled(!working);
     findChild<QPushButton *>("resetOptionsButton")->setEnabled(!working);
-    quality_->setEnabled(!working && (format_->currentData().toString() == "jpg" || format_->currentData().toString() == "original"));
+    findChild<QPushButton *>("trainingPresetButton")->setEnabled(!working);
+    findChild<QPushButton *>("photoPresetButton")->setEnabled(!working);
+    updateFormatControls();
     watermark_->setEnabled(!working && watermarkEnabled_->isChecked());
     watermarkPosition_->setEnabled(!working && watermarkEnabled_->isChecked());
     refreshSelection(); cancel_->setEnabled(working);

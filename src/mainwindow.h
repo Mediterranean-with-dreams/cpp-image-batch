@@ -16,7 +16,11 @@ class QTableWidget;
 class QThread;
 class QPlainTextEdit;
 namespace imagebatch {
-struct Preview { QImage before, after; QSize inputSize, outputSize; QString error, format; };
+struct Preview {
+    QImage before, after; QSize inputSize, outputSize; QString error, format;
+    qint64 inputBytes = 0, outputBytes = 0; int jpegQualityUsed = -1;
+    ColorMode colorMode = ColorMode::KeepColor;
+};
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -47,15 +51,17 @@ private:
     void appendFiles(const QStringList &files);
     void restorePreferences();
     void savePreferences();
+    void updateFormatControls();
     void setBusy(bool busy);
     void updateResult(int completed, int total, const FileResult &result);
     QLineEdit *input_, *output_, *watermark_;
-    QSpinBox *edge_, *quality_, *workers_, *budget_;
-    QComboBox *format_, *watermarkPosition_;
+    QSpinBox *edge_, *quality_, *workers_, *budget_, *targetSize_;
+    QComboBox *format_, *watermarkPosition_, *colorMode_, *pngCompression_;
     QCheckBox *watermarkEnabled_;
     QTableWidget *table_;
     QLabel *before_, *after_, *beforeInfo_, *afterInfo_, *status_, *count_;
     QLabel *metrics_;
+    QLabel *compressionHelp_;
     QPlainTextEdit *details_;
     QPushButton *start_, *cancel_, *import_, *browse_, *outputBrowse_, *openOutput_, *openReport_;
     QPushButton *addFiles_, *selectAll_, *selectNone_, *remove_, *clear_, *retry_;

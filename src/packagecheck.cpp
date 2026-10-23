@@ -30,7 +30,7 @@ int runPackageCheck(QApplication &app, MainWindow &window, const QString &report
     };
     const auto originalHash = hashFile(source);
     const auto secondHash = hashFile(second), thirdHash = hashFile(third), corruptHash = hashFile(corrupt.fileName());
-    bool outputsValid = false, metricsValid = false, retryValid = false, subsetValid = false;
+    bool outputsValid = false, metricsValid = false, retryValid = false, subsetValid = false, grayValid = false, compressedValid = false;
     int phase = 0;
     bool completed = false;
     auto finish = [&](bool passed, const QString &reason) {
@@ -41,6 +41,7 @@ int runPackageCheck(QApplication &app, MainWindow &window, const QString &report
                            {"all_originals_unchanged", hashFile(source) == originalHash && hashFile(second) == secondHash && hashFile(third) == thirdHash && hashFile(corrupt.fileName()) == corruptHash},
                            {"parallel_batch_outputs_valid", outputsValid}, {"batch_metrics_valid", metricsValid},
                            {"retry_without_duplicates_valid", retryValid}, {"subset_original_format_valid", subsetValid},
+                           {"grayscale_png_valid", grayValid}, {"jpeg_target_size_valid", compressedValid},
                            {"version", IMAGEBATCH_VERSION},
                            {"platform", QGuiApplication::platformName()}};
         QFile file(reportPath);
@@ -49,6 +50,28 @@ int runPackageCheck(QApplication &app, MainWindow &window, const QString &report
     };
     QObject::connect(&window, &MainWindow::batchComplete, &window, [&] {
         const QString output = QDir(input).filePath("processed");
+        if (phase == 4) {
+            const auto path = QDir(output).filePath(QStringLiteral("透明 图片_processed_1.jpg"));
+            QImage compressed(path);
+            compressedValid = compressed.size() == QSize(80, 50) && QFileInfo(path).size() > 0 && QFileInfo(path).size() <= 1024;
+            const bool unchanged = hashFile(source) == originalHash && hashFile(second) == secondHash &&
+                hashFile(third) == thirdHash && hashFile(corrupt.fileName()) == corruptHash;
+            finish(outputsValid && metricsValid && retryValid && subsetValid && grayValid && compressedValid && unchanged,
+                "Native GUI batch, retry, selected original format, 8-bit single-channel grayscale PNG, JPEG size limit and unchanged originals verified.");
+            return;
+        }
+        if (phase == 3) {
+            const auto path = QDir(output).filePath(QStringLiteral("透明 图片_processed_1.png"));
+            QFile file(path); QByteArray data; if (file.open(QIODevice::ReadOnly)) data = file.readAll();
+            QImage gray(path);
+            grayValid = data.size() > 25 && quint8(data[24]) == 8 && quint8(data[25]) == 0 &&
+                gray.size() == QSize(160, 100) && gray.pixelColor(0, 0) == QColor(Qt::white);
+            if (!grayValid) { finish(false, "Grayscale PNG channel or background validation failed."); return; }
+            window.findChild<QPushButton *>("photoPresetButton")->click();
+            window.findChild<QSpinBox *>("maxEdge")->setValue(80);
+            window.findChild<QSpinBox *>("jpegTargetSize")->setValue(1);
+            phase = 4; window.findChild<QPushButton *>("startButton")->click(); return;
+        }
         if (phase == 1) {
             QFile metrics(window.lastReport().left(window.lastReport().size() - 4) + ".json");
             if (metrics.open(QIODevice::ReadOnly)) {
@@ -68,11 +91,10 @@ int runPackageCheck(QApplication &app, MainWindow &window, const QString &report
             subsetValid = png.size() == QSize(80, 50) && png.pixelColor(0, 0).alpha() == 0 &&
                 QDir(output).entryList({"*.png"}, QDir::Files).size() == 1 &&
                 QDir(output).entryList({"*.jpg"}, QDir::Files).size() == 3;
-            const bool unchanged = hashFile(source) == originalHash && hashFile(second) == secondHash &&
-                hashFile(third) == thirdHash && hashFile(corrupt.fileName()) == corruptHash;
-            finish(outputsValid && metricsValid && retryValid && subsetValid && unchanged,
-                "Native GUI parallel batch, failed-only retry without duplicates, selected original-format PNG with transparency, reports and original hashes verified.");
-            return;
+            if (!subsetValid) { finish(false, "Selected original-format output validation failed."); return; }
+            window.findChild<QPushButton *>("trainingPresetButton")->click();
+            window.findChild<QComboBox *>("pngCompression")->setCurrentIndex(2);
+            phase = 3; window.findChild<QPushButton *>("startButton")->click(); return;
         }
         QImage result(QDir(input).filePath("processed/透明 图片_processed.jpg"));
         QImage result2(QDir(input).filePath("processed/第二张_processed.jpg"));

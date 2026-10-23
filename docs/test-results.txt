@@ -24,6 +24,10 @@ PASS   : ImageBatchTests::concurrentDistinctImagesPreserveContent()
 PASS   : ImageBatchTests::serialAndParallelProduceIdenticalBytes()
 PASS   : ImageBatchTests::budgetLimitsAdmissionsAndParallelCancellation()
 PASS   : ImageBatchTests::callbackFailureIsContained()
+PASS   : ImageBatchTests::grayscalePixelsAndPngChannels()
+PASS   : ImageBatchTests::pngCompressionIsLossless()
+PASS   : ImageBatchTests::jpegTargetSizeAndFailureProtection()
+PASS   : ImageBatchTests::guiProcessingHelpGrayscaleAndCompression()
 PASS   : ImageBatchTests::preserveOriginalFormatAndTransparency()
 PASS   : ImageBatchTests::preferencesRoundTripAndInvalidData()
 PASS   : ImageBatchTests::guiDropDeduplicateAndRemove()
@@ -34,5 +38,5 @@ PASS   : ImageBatchTests::guiImportPreviewAndProcessing()
 PASS   : ImageBatchTests::guiBrokenPreviewStaysClearedAfterResize()
 PASS   : ImageBatchTests::guiEmptyInvalidAndCancel()
 PASS   : ImageBatchTests::cleanupTestCase()
-Totals: 34 passed, 0 failed, 0 skipped, 0 blacklisted, 6537ms
+Totals: 38 passed, 0 failed, 0 skipped, 0 blacklisted, 7770ms
 ********* Finished testing of ImageBatchTests *********

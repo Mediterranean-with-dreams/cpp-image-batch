@@ -13,6 +13,9 @@ Preferences readPreferences(const QString &file) {
     };
     p.options.maxEdge = bounded("image/maxEdge", 1920, 0, 20000);
     p.options.jpegQuality = bounded("image/quality", 90, 1, 100);
+    p.options.jpegTargetKiB = bounded("image/jpegTargetKiB", 0, 0, 102400);
+    p.options.pngCompression = bounded("image/pngCompression", 50, 0, 100);
+    p.options.colorMode = static_cast<ColorMode>(bounded("image/colorMode", 0, 0, 2));
     p.options.format = settings.value("image/format", "jpg").toString();
     if (!QStringList{"jpg", "png", "bmp", "original"}.contains(p.options.format)) p.options.format = "jpg";
     p.options.watermark = settings.value("image/watermark").toString().left(100);
@@ -33,6 +36,9 @@ bool writePreferences(const QString &file, const Preferences &p, QString *error)
     QSettings settings(file, QSettings::IniFormat);
     settings.setValue("image/maxEdge", p.options.maxEdge);
     settings.setValue("image/quality", p.options.jpegQuality);
+    settings.setValue("image/jpegTargetKiB", p.options.jpegTargetKiB);
+    settings.setValue("image/pngCompression", p.options.pngCompression);
+    settings.setValue("image/colorMode", static_cast<int>(p.options.colorMode));
     settings.setValue("image/format", p.options.format);
     settings.setValue("image/watermark", p.options.watermark);
     settings.setValue("image/position", static_cast<int>(p.options.watermarkPosition));

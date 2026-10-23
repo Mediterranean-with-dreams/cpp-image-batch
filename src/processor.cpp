@@ -31,6 +31,12 @@ QString validateOptions(const Options &o) {
         return QStringLiteral("输出格式必须为 JPG、PNG、BMP 或保持原格式");
     if (o.jpegQuality < 1 || o.jpegQuality > 100)
         return QStringLiteral("JPEG 质量必须为 1～100");
+    if (o.jpegTargetKiB < 0 || o.jpegTargetKiB > 102400)
+        return QStringLiteral("JPG 大小上限必须为 0～102400 KiB（0 表示不限制）");
+    if (o.pngCompression < 0 || o.pngCompression > 100)
+        return QStringLiteral("PNG 压缩级别必须为 0～100");
+    if (static_cast<int>(o.colorMode) < 0 || static_cast<int>(o.colorMode) > 2)
+        return QStringLiteral("颜色处理模式无效");
     if (o.watermark.size() > 100)
         return QStringLiteral("水印文字最多 100 个字符");
     if (static_cast<int>(o.watermarkPosition) < 0 || static_cast<int>(o.watermarkPosition) > 3)
@@ -81,7 +87,7 @@ QImage transformImage(const QImage &input, const Options &o) {
     if (image.colorSpace().isValid()) image = image.convertedToColorSpace(QColorSpace::SRgb);
     image = image.convertToFormat(QImage::Format_ARGB32);
     image.setDevicePixelRatio(1.0);
-    if (o.format == "jpg" || o.format == "bmp") {
+    if (o.format == "jpg" || o.format == "bmp" || o.colorMode != ColorMode::KeepColor) {
         QImage opaque(image.size(), QImage::Format_RGB32);
         opaque.fill(Qt::white);
         QPainter painter(&opaque);
@@ -119,6 +125,10 @@ QImage transformImage(const QImage &input, const Options &o) {
         painter.setPen(QColor(255, 255, 255, 230));
         painter.drawText(area, alignment, o.watermark);
     }
+    if (o.colorMode != ColorMode::KeepColor) {
+        image = image.convertToFormat(QImage::Format_Grayscale8);
+        if (o.colorMode == ColorMode::GrayscaleRgb) image = image.convertToFormat(QImage::Format_RGB888);
+    }
     return image;
 }
 static QString candidatePath(const QString &dir, const QString &stem, const QString &suffix, int n) {
@@ -145,6 +155,7 @@ static bool publishNoReplace(const QString &source, const QString &destination, 
 FileResult processFile(const QString &input, const QString &outputDir, const Options &o) {
     FileResult r;
     r.inputPath = input;
+    r.inputBytes = QFileInfo(input).size(); r.colorMode = o.colorMode;
     r.status = "failed";
     r.error = validateOptions(o);
     if (!r.error.isEmpty()) return r;
@@ -161,15 +172,16 @@ FileResult processFile(const QString &input, const QString &outputDir, const Opt
     image = transformImage(image, effective);
     if (image.isNull()) { r.error = QStringLiteral("图像处理失败或内存不足"); return r; }
     r.outputSize = image.size();
+    const auto encoded = encodeImage(image, effective);
+    if (!encoded.error.isEmpty()) { r.error = encoded.error; return r; }
+    r.jpegQualityUsed = encoded.jpegQualityUsed;
     if (!QDir().mkpath(outputDir)) { r.error = QStringLiteral("无法创建输出文件夹"); return r; }
     QString temporaryPath;
     const auto cleanup = qScopeGuard([&] { if (!temporaryPath.isEmpty()) QFile::remove(temporaryPath); });
     {
         QTemporaryFile temp(QDir(outputDir).filePath(".imagebatch-XXXXXX"));
         if (!temp.open()) { r.error = temp.errorString(); return r; }
-        QImageWriter writer(&temp, effective.format.toLatin1());
-        if (effective.format == "jpg") writer.setQuality(o.jpegQuality);
-        if (!writer.write(image)) { r.error = writer.errorString(); return r; }
+        if (temp.write(encoded.data) != encoded.data.size()) { r.error = temp.errorString(); return r; }
         if (!temp.flush()) { r.error = temp.errorString(); return r; }
         temporaryPath = temp.fileName();
         temp.setAutoRemove(false);
@@ -180,6 +192,7 @@ FileResult processFile(const QString &input, const QString &outputDir, const Opt
         if (QFileInfo::exists(out)) continue;
         if (publishNoReplace(temporaryPath, out, &r.error)) {
             r.outputPath = out;
+            r.outputBytes = QFileInfo(out).size();
             r.status = "success";
             r.error.clear();
             return r;
@@ -205,11 +218,13 @@ QString writeReport(const QList<FileResult> &results, const QString &directory, 
         QTextStream stream(&file);
         stream.setEncoding(QStringConverter::Utf8);
         stream.setGenerateByteOrderMark(true);
-        stream << "input,output,status,error,original_width,original_height,output_width,output_height,elapsed_ms\n";
+        stream << "input,output,status,error,original_width,original_height,output_width,output_height,elapsed_ms,input_bytes,output_bytes,jpeg_quality_used,color_mode\n";
         for (const auto &r : results)
             stream << csv(r.inputPath) << ',' << csv(r.outputPath) << ',' << csv(r.status) << ','
                    << csv(r.error) << ',' << r.originalSize.width() << ',' << r.originalSize.height()
-                   << ',' << r.outputSize.width() << ',' << r.outputSize.height() << ',' << r.elapsedMs << '\n';
+                   << ',' << r.outputSize.width() << ',' << r.outputSize.height() << ',' << r.elapsedMs
+                   << ',' << r.inputBytes << ',' << r.outputBytes << ',' << r.jpegQualityUsed << ','
+                   << (r.colorMode == ColorMode::Grayscale ? "gray_1ch" : r.colorMode == ColorMode::GrayscaleRgb ? "gray_rgb" : "color") << '\n';
         stream.flush();
         if (stream.status() != QTextStream::Ok || !file.flush()) {
             if (error) *error = QStringLiteral("报告写入失败：") + file.errorString();

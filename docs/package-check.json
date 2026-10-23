@@ -1,13 +1,15 @@
 {
     "all_originals_unchanged": true,
     "batch_metrics_valid": true,
+    "grayscale_png_valid": true,
+    "jpeg_target_size_valid": true,
     "original_unchanged": true,
     "parallel_batch_outputs_valid": true,
     "passed": true,
     "platform": "windows",
     "qt_version": "6.8.3",
-    "reason": "Native GUI parallel batch, failed-only retry without duplicates, selected original-format PNG with transparency, reports and original hashes verified.",
+    "reason": "Native GUI batch, retry, selected original format, 8-bit single-channel grayscale PNG, JPEG size limit and unchanged originals verified.",
     "retry_without_duplicates_valid": true,
     "subset_original_format_valid": true,
-    "version": "1.2.0"
+    "version": "1.3.0"
 }

@@ -57,6 +57,10 @@ private slots:
         o.jpegQuality = 101; QVERIFY(!validateOptions(o).isEmpty());
         o.jpegQuality = 90; o.format = "gif"; QVERIFY(!validateOptions(o).isEmpty());
         o.format = "png"; o.watermark = QString(101, 'x'); QVERIFY(!validateOptions(o).isEmpty());
+        o.watermark.clear(); o.jpegTargetKiB = -1; QVERIFY(!validateOptions(o).isEmpty());
+        o.jpegTargetKiB = 102401; QVERIFY(!validateOptions(o).isEmpty());
+        o.jpegTargetKiB = 0; o.pngCompression = 101; QVERIFY(!validateOptions(o).isEmpty());
+        o.pngCompression = 50; o.colorMode = static_cast<ColorMode>(3); QVERIFY(!validateOptions(o).isEmpty());
     }
     void scanAndEmptyDirectory() {
         QTemporaryDir dir; QVERIFY(dir.isValid());
@@ -339,6 +343,130 @@ private slots:
         QCOMPARE(summary.succeeded, 1); QVERIFY(summary.error.contains(QStringLiteral("通知异常")));
         QVERIFY(QFileInfo::exists(summary.metricsReport));
     }
+    void grayscalePixelsAndPngChannels() {
+        QTemporaryDir dir;
+        QImage input(120, 80, QImage::Format_ARGB32); input.fill(Qt::transparent);
+        input.setColorSpace(QColorSpace::SRgb);
+        { QPainter painter(&input); painter.fillRect(30, 10, 30, 40, Qt::red); painter.fillRect(70, 10, 30, 40, Qt::green); }
+        const auto original = input;
+        Options o; o.format = "png"; o.colorMode = ColorMode::Grayscale;
+        const auto gray = transformImage(input, o);
+        QCOMPARE(gray.format(), QImage::Format_Grayscale8); QVERIFY(!gray.hasAlphaChannel());
+        QCOMPARE(gray.pixelColor(0, 0), QColor(Qt::white)); QVERIFY(gray.pixelColor(40, 20) != gray.pixelColor(80, 20));
+        for (int y = 0; y < gray.height(); ++y) for (int x = 0; x < gray.width(); ++x) {
+            const auto color = gray.pixelColor(x, y); QCOMPARE(color.red(), color.green()); QCOMPARE(color.green(), color.blue());
+        }
+        QCOMPARE(input, original);
+        for (auto mode : {ColorMode::Grayscale, ColorMode::GrayscaleRgb}) {
+            o.colorMode = mode;
+            const auto transformed = transformImage(input, o);
+            const auto encoded = encodeImage(transformed, o);
+            QVERIFY(encoded.error.isEmpty()); QVERIFY(encoded.data.startsWith(QByteArray::fromHex("89504e470d0a1a0a")));
+            QCOMPARE(quint8(encoded.data[24]), quint8(8));
+            QCOMPARE(quint8(encoded.data[25]), mode == ColorMode::Grayscale ? quint8(0) : quint8(2)); // PNG IHDR channel layout.
+            const QImage reopened = QImage::fromData(encoded.data, "PNG"); QVERIFY(!reopened.isNull());
+            QCOMPARE(reopened.pixelColor(40, 20).red(), reopened.pixelColor(40, 20).green());
+        }
+        const auto source = dir.filePath("source.png"); QVERIFY(input.save(source)); const auto hash = digest(source);
+        o.colorMode = ColorMode::Grayscale; o.watermark = "GRAY WATERMARK";
+        for (const auto &format : QStringList{"jpg", "png", "bmp"}) {
+            o.format = format; const auto result = processFile(source, dir.filePath("out"), o);
+            QCOMPARE(result.status, QString("success")); QImage output(result.outputPath); QVERIFY(!output.isNull());
+            for (int y = 0; y < output.height(); y += 9) for (int x = 0; x < output.width(); x += 9) {
+                const auto c = output.pixelColor(x, y); QCOMPARE(c.red(), c.green()); QCOMPARE(c.green(), c.blue());
+            }
+        }
+        QCOMPARE(digest(source), hash);
+    }
+    void pngCompressionIsLossless() {
+        QTemporaryDir dir; const auto input = dir.filePath("sample.png"); QVERIFY(scene(700, 500).save(input));
+        Options o; o.format = "png"; o.pngCompression = 0; o.jpegTargetKiB = 1; // JPG limit does not affect PNG.
+        const auto fast = processFile(input, dir.filePath("out"), o);
+        o.pngCompression = 100; const auto compact = processFile(input, dir.filePath("out"), o);
+        QCOMPARE(fast.status, QString("success")); QCOMPARE(compact.status, QString("success"));
+        QCOMPARE(QImage(fast.outputPath), QImage(compact.outputPath));
+        QVERIFY(fast.outputBytes > compact.outputBytes); QCOMPARE(compact.jpegQualityUsed, -1);
+        QCOMPARE(compact.outputBytes, QFileInfo(compact.outputPath).size());
+    }
+    void jpegTargetSizeAndFailureProtection() {
+        QTemporaryDir dir; const auto path = dir.filePath("noise.png");
+        QImage noise(640, 480, QImage::Format_RGB32);
+        for (int y = 0; y < noise.height(); ++y) for (int x = 0; x < noise.width(); ++x) {
+            quint32 value = quint32(x + y * 640 + 1) * 747796405U; value ^= value >> 16; value *= 2246822519U;
+            noise.setPixel(x, y, qRgb(value & 255, (value >> 8) & 255, (value >> 16) & 255));
+        }
+        QVERIFY(noise.save(path)); const auto hash = digest(path);
+        Options o; o.jpegQuality = 95; const auto transformed = transformImage(noise, o);
+        const auto high = encodeImage(transformed, o); QVERIFY(high.error.isEmpty());
+        o.jpegTargetKiB = 40;
+        const auto preview = encodeImage(transformed, o); QVERIFY2(preview.error.isEmpty(), qPrintable(preview.error));
+        QVERIFY(preview.data.size() <= 40 * 1024); QVERIFY(preview.data.size() < high.data.size());
+        QVERIFY(preview.jpegQualityUsed >= 1 && preview.jpegQualityUsed < 95);
+        const auto result = processFile(path, dir.filePath("out"), o); QCOMPARE(result.status, QString("success"));
+        QCOMPARE(result.outputBytes, qint64(preview.data.size())); QCOMPARE(result.jpegQualityUsed, preview.jpegQualityUsed);
+        QCOMPARE(QImage(result.outputPath).size(), noise.size()); QCOMPARE(result.inputBytes, QFileInfo(path).size());
+        QFile saved(result.outputPath); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), preview.data);
+        o.jpegTargetKiB = 1;
+        const auto failed = processFile(path, dir.filePath("impossible"), o);
+        QCOMPARE(failed.status, QString("failed")); QVERIFY(failed.outputPath.isEmpty());
+        QVERIFY(failed.error.contains(QStringLiteral("最长边"))); QCOMPARE(digest(path), hash);
+        QCOMPARE(QDir(dir.filePath("impossible")).entryList({"*.jpg", ".imagebatch-*"}, QDir::Files | QDir::Hidden).size(), 0);
+        QFile report(writeReport({result}, dir.filePath("out"))); QVERIFY(report.open(QIODevice::ReadOnly));
+        const auto csv = report.readAll(); QVERIFY(csv.contains("input_bytes,output_bytes,jpeg_quality_used,color_mode"));
+        QVERIFY(csv.contains(QByteArray::number(result.outputBytes)));
+    }
+    void guiProcessingHelpGrayscaleAndCompression() {
+        QTemporaryDir dir; const auto path = dir.filePath("scene.png"); QVERIFY(scene(1200, 800).save(path));
+        MainWindow window; window.show();
+        QVERIFY(window.findChild<QLabel *>("parameterHelp")->text().contains("4000"));
+        QVERIFY(window.findChild<QLabel *>("parameterHelp")->text().contains(QStringLiteral("不是画质百分比")));
+        auto *target = window.findChild<QSpinBox *>("jpegTargetSize");
+        auto *png = window.findChild<QComboBox *>("pngCompression");
+        QVERIFY(target->isEnabled()); QVERIFY(!png->isEnabled());
+        window.findChild<QCheckBox *>("watermarkEnabled")->setChecked(true);
+        window.findChild<QPushButton *>("trainingPresetButton")->click();
+        QCOMPARE(window.findChild<QComboBox *>("colorMode")->currentIndex(), 1);
+        QCOMPARE(window.findChild<QSpinBox *>("maxEdge")->value(), 0);
+        QVERIFY(!window.findChild<QCheckBox *>("watermarkEnabled")->isChecked());
+        QVERIFY(!target->isEnabled()); QVERIFY(png->isEnabled());
+        QSignalSpy preview(&window, &MainWindow::previewReady); window.addPaths({path});
+        QTRY_VERIFY_WITH_TIMEOUT(preview.size() > 0, 10000);
+        QSignalSpy done(&window, &MainWindow::batchComplete); window.findChild<QPushButton *>("startButton")->click();
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 10000);
+        QFile gray(dir.filePath("processed/scene_processed.png")); QVERIFY(gray.open(QIODevice::ReadOnly));
+        const auto bytes = gray.readAll(); QCOMPARE(quint8(bytes[25]), quint8(0));
+        gray.close();
+        QVERIFY(window.findChild<QLabel *>("afterInfo")->toolTip().contains(QString::number(bytes.size()) + QStringLiteral(" 字节")));
+        const auto artifacts = qEnvironmentVariable("IMAGEBATCH_ARTIFACT_DIR");
+        if (!artifacts.isEmpty()) {
+            auto *input = window.findChild<QLineEdit *>("inputPath"), *output = window.findChild<QLineEdit *>("outputPath");
+            auto *details = window.findChild<QPlainTextEdit *>("fileDetails");
+            const auto savedInput = input->text(), savedOutput = output->text(), savedDetails = details->toPlainText();
+            input->setText(QStringLiteral("示例图片文件夹")); output->setText(QStringLiteral("示例图片文件夹/processed"));
+            details->setPlainText(QStringLiteral("输入：示例图片文件夹/scene.png\n输出：示例图片文件夹/processed/scene_processed.png\n颜色：8 位单通道灰度 PNG"));
+            auto *shell = window.centralWidget(); const auto savedSize = shell->size();
+            shell->resize(shell->width(), window.findChild<QScrollArea *>("contentScroll")->widget()->height()
+                + window.findChild<QWidget *>("footerPanel")->height()); shell->layout()->activate();
+            QVERIFY(shell->grab().save(QDir(artifacts).filePath("grayscale-preview.png"))); shell->resize(savedSize);
+            input->setText(savedInput); output->setText(savedOutput); details->setPlainText(savedDetails);
+            QVERIFY(QFile::copy(gray.fileName(), QDir(artifacts).filePath("sample_gray.png")));
+        }
+        window.findChild<QPushButton *>("photoPresetButton")->click(); target->setValue(20);
+        const auto previous = preview.size(); QTRY_VERIFY_WITH_TIMEOUT(preview.size() > previous, 10000);
+        const auto sizeTip = window.findChild<QLabel *>("afterInfo")->toolTip();
+        QVERIFY(sizeTip.contains(QStringLiteral("JPEG 实际质量")));
+        window.findChild<QPushButton *>("startButton")->click(); QTRY_COMPARE_WITH_TIMEOUT(done.size(), 2, 10000);
+        const auto jpg = dir.filePath("processed/scene_processed.jpg"); QVERIFY(QFileInfo::exists(jpg));
+        QVERIFY(QFileInfo(jpg).size() <= 20 * 1024);
+        QVERIFY(sizeTip.contains(QString::number(QFileInfo(jpg).size()) + QStringLiteral(" 字节")));
+        window.findChild<QPushButton *>("resetOptionsButton")->click();
+        QCOMPARE(target->value(), 0); QCOMPARE(window.findChild<QComboBox *>("colorMode")->currentIndex(), 0);
+        target->setValue(1); window.findChild<QSpinBox *>("maxEdge")->setValue(0);
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QLabel *>("afterInfo")->text().contains(QStringLiteral("预览失败")), 10000);
+        QVERIFY(!window.findChild<QLabel *>("beforePreview")->pixmap().isNull());
+        QVERIFY(window.findChild<QLabel *>("afterPreview")->pixmap().isNull());
+        QVERIFY(window.findChild<QLabel *>("afterInfo")->toolTip().isEmpty());
+    }
     void preserveOriginalFormatAndTransparency() {
         QTemporaryDir dir; Options options; options.format = "original"; options.maxEdge = 100;
         QImage image(160, 100, QImage::Format_ARGB32); image.fill(Qt::transparent);
@@ -361,12 +489,15 @@ private slots:
     void preferencesRoundTripAndInvalidData() {
         QTemporaryDir dir; const auto path = dir.filePath("settings.ini");
         Preferences p; p.options.maxEdge = 1280; p.options.format = "original"; p.options.jpegQuality = 81;
+        p.options.jpegTargetKiB = 35; p.options.pngCompression = 100; p.options.colorMode = ColorMode::GrayscaleRgb;
         p.options.watermark = QStringLiteral("我的图片"); p.options.watermarkPosition = WatermarkPosition::TopLeft;
         p.watermarkEnabled = true; p.batch.workers = 3; p.batch.memoryBudgetBytes = 256ULL * 1024 * 1024;
         p.lastFolder = dir.filePath(QStringLiteral("中文 space"));
         QString error; QVERIFY(writePreferences(path, p, &error)); QVERIFY(error.isEmpty());
         const auto restored = readPreferences(path);
         QCOMPARE(restored.options.maxEdge, 1280); QCOMPARE(restored.options.format, QString("original"));
+        QCOMPARE(restored.options.jpegTargetKiB, 35); QCOMPARE(restored.options.pngCompression, 100);
+        QCOMPARE(restored.options.colorMode, ColorMode::GrayscaleRgb);
         QCOMPARE(restored.options.watermark, p.options.watermark); QVERIFY(restored.watermarkEnabled);
         QCOMPARE(restored.options.watermarkPosition, WatermarkPosition::TopLeft);
         QCOMPARE(restored.batch.workers, 3); QCOMPARE(restored.batch.memoryBudgetBytes, p.batch.memoryBudgetBytes);
@@ -374,12 +505,16 @@ private slots:
         { QSettings settings(path, QSettings::IniFormat);
           settings.setValue("image/maxEdge", "bad"); settings.setValue("image/quality", 0);
           settings.setValue("image/format", "tiff"); settings.setValue("batch/workers", 999);
-          settings.setValue("batch/budgetMiB", -1); settings.setValue("image/position", 999); settings.sync(); }
+          settings.setValue("batch/budgetMiB", -1); settings.setValue("image/position", 999);
+          settings.setValue("image/colorMode", 99); settings.setValue("image/jpegTargetKiB", -1);
+          settings.setValue("image/pngCompression", 999); settings.sync(); }
         const auto invalid = readPreferences(path);
         QCOMPARE(invalid.options.maxEdge, 1920); QCOMPARE(invalid.options.jpegQuality, 90);
         QCOMPARE(invalid.options.format, QString("jpg")); QCOMPARE(invalid.batch.workers, 2);
         QCOMPARE(invalid.batch.memoryBudgetBytes, quint64(512) * 1024 * 1024);
         QCOMPARE(invalid.options.watermarkPosition, WatermarkPosition::BottomRight);
+        QCOMPARE(invalid.options.colorMode, ColorMode::KeepColor); QCOMPARE(invalid.options.jpegTargetKiB, 0);
+        QCOMPARE(invalid.options.pngCompression, 50);
         QFile blocker(dir.filePath("blocker")); QVERIFY(blocker.open(QIODevice::WriteOnly)); blocker.close();
         QVERIFY(!writePreferences(dir.filePath("blocker/settings.ini"), p, &error)); QVERIFY(!error.isEmpty());
     }
@@ -450,12 +585,19 @@ private slots:
             window.findChild<QComboBox *>("outputFormat")->setCurrentIndex(3);
             window.findChild<QCheckBox *>("watermarkEnabled")->setChecked(true);
             window.findChild<QLineEdit *>("watermarkText")->setText(QStringLiteral("设置测试"));
-            window.findChild<QSpinBox *>("workerCount")->setValue(3); window.close();
+            window.findChild<QSpinBox *>("workerCount")->setValue(3);
+            // These controls are restored independently of whether their current format enables them.
+            window.findChild<QComboBox *>("colorMode")->setCurrentIndex(2);
+            window.findChild<QSpinBox *>("jpegTargetSize")->setValue(123);
+            window.findChild<QComboBox *>("pngCompression")->setCurrentIndex(2); window.close();
         }
         MainWindow restored(nullptr, settingsFile); restored.show();
         QCOMPARE(restored.findChild<QSpinBox *>("maxEdge")->value(), 1280);
         QCOMPARE(restored.findChild<QComboBox *>("outputFormat")->currentData().toString(), QString("original"));
         QCOMPARE(restored.findChild<QLineEdit *>("watermarkText")->text(), QStringLiteral("设置测试"));
+        QCOMPARE(restored.findChild<QComboBox *>("colorMode")->currentIndex(), 2);
+        QCOMPARE(restored.findChild<QSpinBox *>("jpegTargetSize")->value(), 123);
+        QCOMPARE(restored.findChild<QComboBox *>("pngCompression")->currentIndex(), 2);
         restored.findChild<QPushButton *>("resetOptionsButton")->click();
         QCOMPARE(restored.findChild<QSpinBox *>("maxEdge")->value(), 1920);
         QCOMPARE(restored.findChild<QSpinBox *>("workerCount")->value(), 2);
