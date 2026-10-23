@@ -27,12 +27,14 @@ namespace imagebatch {
 QString validateOptions(const Options &o) {
     if (o.maxEdge < 0 || o.maxEdge > 20000)
         return QStringLiteral("最长边必须为 0～20000 像素（0 表示保持原尺寸）");
-    if (!QStringList{"jpg", "png", "bmp"}.contains(o.format))
-        return QStringLiteral("输出格式必须为 JPG、PNG 或 BMP");
+    if (!QStringList{"jpg", "png", "bmp", "original"}.contains(o.format))
+        return QStringLiteral("输出格式必须为 JPG、PNG、BMP 或保持原格式");
     if (o.jpegQuality < 1 || o.jpegQuality > 100)
         return QStringLiteral("JPEG 质量必须为 1～100");
     if (o.watermark.size() > 100)
         return QStringLiteral("水印文字最多 100 个字符");
+    if (static_cast<int>(o.watermarkPosition) < 0 || static_cast<int>(o.watermarkPosition) > 3)
+        return QStringLiteral("水印位置无效");
     return {};
 }
 QStringList scanImages(const QString &path, QString *error) {
@@ -48,6 +50,18 @@ QStringList scanImages(const QString &path, QString *error) {
             files.append(f.absoluteFilePath());
     }
     return files;
+}
+QString outputFormatForFile(const QString &path, const Options &options, QString *error) {
+    if (error) error->clear();
+    if (options.format != "original") return options.format;
+    // Use the content's format, including files whose extension is misleading.
+    QString format = QString::fromLatin1(QImageReader::imageFormat(path)).toLower();
+    if (format == "jpeg") format = "jpg";
+    if (!QStringList{"jpg", "png", "bmp"}.contains(format)) {
+        if (error) *error = QStringLiteral("无法识别可保留的原始格式（仅支持 JPG / PNG / BMP）");
+        return {};
+    }
+    return format;
 }
 QImage loadImage(const QString &path, QString *error) {
     if (error) error->clear();
@@ -134,6 +148,9 @@ FileResult processFile(const QString &input, const QString &outputDir, const Opt
     r.status = "failed";
     r.error = validateOptions(o);
     if (!r.error.isEmpty()) return r;
+    Options effective = o;
+    effective.format = outputFormatForFile(input, o, &r.error);
+    if (effective.format.isEmpty()) return r;
     if (outputDir.trimmed().isEmpty()) { r.error = QStringLiteral("输出文件夹不能为空"); return r; }
     if (QFileInfo(input).absolutePath() == QDir(outputDir).absolutePath()) {
         r.error = QStringLiteral("输出文件夹必须与原图文件夹不同"); return r;
@@ -141,7 +158,7 @@ FileResult processFile(const QString &input, const QString &outputDir, const Opt
     QImage image = loadImage(input, &r.error);
     if (image.isNull()) return r;
     r.originalSize = image.size();
-    image = transformImage(image, o);
+    image = transformImage(image, effective);
     if (image.isNull()) { r.error = QStringLiteral("图像处理失败或内存不足"); return r; }
     r.outputSize = image.size();
     if (!QDir().mkpath(outputDir)) { r.error = QStringLiteral("无法创建输出文件夹"); return r; }
@@ -150,8 +167,8 @@ FileResult processFile(const QString &input, const QString &outputDir, const Opt
     {
         QTemporaryFile temp(QDir(outputDir).filePath(".imagebatch-XXXXXX"));
         if (!temp.open()) { r.error = temp.errorString(); return r; }
-        QImageWriter writer(&temp, o.format.toLatin1());
-        if (o.format == "jpg") writer.setQuality(o.jpegQuality);
+        QImageWriter writer(&temp, effective.format.toLatin1());
+        if (effective.format == "jpg") writer.setQuality(o.jpegQuality);
         if (!writer.write(image)) { r.error = writer.errorString(); return r; }
         if (!temp.flush()) { r.error = temp.errorString(); return r; }
         temporaryPath = temp.fileName();
@@ -159,7 +176,7 @@ FileResult processFile(const QString &input, const QString &outputDir, const Opt
     } // QTemporaryFile::close() alone keeps its native handle open; destroy it.
     const QString stem = QFileInfo(input).completeBaseName() + "_processed";
     for (int n = 0; n < 100000; ++n) {
-        const QString out = candidatePath(outputDir, stem, o.format, n);
+        const QString out = candidatePath(outputDir, stem, effective.format, n);
         if (QFileInfo::exists(out)) continue;
         if (publishNoReplace(temporaryPath, out, &r.error)) {
             r.outputPath = out;

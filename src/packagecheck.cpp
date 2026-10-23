@@ -29,16 +29,18 @@ int runPackageCheck(QApplication &app, MainWindow &window, const QString &report
         return QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256);
     };
     const auto originalHash = hashFile(source);
-    const auto secondHash = hashFile(second), thirdHash = hashFile(third);
-    bool outputsValid = false, metricsValid = false;
+    const auto secondHash = hashFile(second), thirdHash = hashFile(third), corruptHash = hashFile(corrupt.fileName());
+    bool outputsValid = false, metricsValid = false, retryValid = false, subsetValid = false;
+    int phase = 0;
     bool completed = false;
     auto finish = [&](bool passed, const QString &reason) {
         if (completed) return;
         completed = true;
         QJsonObject report{{"passed", passed}, {"reason", reason}, {"qt_version", qVersion()},
                            {"original_unchanged", hashFile(source) == originalHash},
-                           {"all_originals_unchanged", hashFile(source) == originalHash && hashFile(second) == secondHash && hashFile(third) == thirdHash},
+                           {"all_originals_unchanged", hashFile(source) == originalHash && hashFile(second) == secondHash && hashFile(third) == thirdHash && hashFile(corrupt.fileName()) == corruptHash},
                            {"parallel_batch_outputs_valid", outputsValid}, {"batch_metrics_valid", metricsValid},
+                           {"retry_without_duplicates_valid", retryValid}, {"subset_original_format_valid", subsetValid},
                            {"version", IMAGEBATCH_VERSION},
                            {"platform", QGuiApplication::platformName()}};
         QFile file(reportPath);
@@ -46,6 +48,32 @@ int runPackageCheck(QApplication &app, MainWindow &window, const QString &report
         file.close(); app.exit(passed ? 0 : 1);
     };
     QObject::connect(&window, &MainWindow::batchComplete, &window, [&] {
+        const QString output = QDir(input).filePath("processed");
+        if (phase == 1) {
+            QFile metrics(window.lastReport().left(window.lastReport().size() - 4) + ".json");
+            if (metrics.open(QIODevice::ReadOnly)) {
+                const auto json = QJsonDocument::fromJson(metrics.readAll()).object();
+                retryValid = json.value("success").toInt() == 0 && json.value("failed").toInt() == 1 &&
+                    QDir(output).entryList({"*.jpg"}, QDir::Files).size() == 3;
+            }
+            if (!retryValid) { finish(false, "Retry duplicated successes or did not isolate the corrupt image."); return; }
+            auto *table = window.findChild<QTableWidget *>("fileTable");
+            for (int row = 0; row < table->rowCount(); ++row)
+                table->item(row, 0)->setCheckState(table->item(row, 0)->data(Qt::UserRole).toString() == source ? Qt::Checked : Qt::Unchecked);
+            window.findChild<QComboBox *>("outputFormat")->setCurrentIndex(3);
+            phase = 2; window.findChild<QPushButton *>("startButton")->click(); return;
+        }
+        if (phase == 2) {
+            QImage png(QDir(output).filePath(QStringLiteral("透明 图片_processed.png")));
+            subsetValid = png.size() == QSize(80, 50) && png.pixelColor(0, 0).alpha() == 0 &&
+                QDir(output).entryList({"*.png"}, QDir::Files).size() == 1 &&
+                QDir(output).entryList({"*.jpg"}, QDir::Files).size() == 3;
+            const bool unchanged = hashFile(source) == originalHash && hashFile(second) == secondHash &&
+                hashFile(third) == thirdHash && hashFile(corrupt.fileName()) == corruptHash;
+            finish(outputsValid && metricsValid && retryValid && subsetValid && unchanged,
+                "Native GUI parallel batch, failed-only retry without duplicates, selected original-format PNG with transparency, reports and original hashes verified.");
+            return;
+        }
         QImage result(QDir(input).filePath("processed/透明 图片_processed.jpg"));
         QImage result2(QDir(input).filePath("processed/第二张_processed.jpg"));
         QImage result3(QDir(input).filePath("processed/竖图_processed.jpg"));
@@ -61,8 +89,8 @@ int runPackageCheck(QApplication &app, MainWindow &window, const QString &report
                         QFileInfo::exists(window.lastReport()) && originalHash == hashFile(source) &&
                         hashFile(second) == secondHash && hashFile(third) == thirdHash &&
                         result.pixelColor(0, 0).red() > 245 && result.pixelColor(0, 0).green() > 245;
-        finish(ok, ok ? "Parallel native GUI batch: 3 successful images, 1 corrupt-image failure, CSV/JSON verified and originals unchanged."
-                     : "Packaged GUI result validation failed.");
+        if (!ok) { finish(false, "Packaged GUI result validation failed."); return; }
+        phase = 1; window.findChild<QPushButton *>("retryButton")->click();
     });
     QTimer::singleShot(0, &window, [&] {
         window.findChild<QLineEdit *>("inputPath")->setText(input);

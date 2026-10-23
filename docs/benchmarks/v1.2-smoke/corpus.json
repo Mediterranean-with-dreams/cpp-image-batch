@@ -1,0 +1,38 @@
+[
+    {
+        "file": "sample_000.jpg",
+        "height": 1440,
+        "sha256": "489a32e3bb0aa00ad1f458aaed7667d8642b8ba1f8d98c54f266293822d15900",
+        "width": 2560
+    },
+    {
+        "file": "sample_001.png",
+        "height": 1600,
+        "sha256": "88448677fc65e439685cf6f6af6a37118e0496171ff0f2a874ef8372e8ef2e00",
+        "width": 2400
+    },
+    {
+        "file": "sample_002.jpg",
+        "height": 2400,
+        "sha256": "c8544e72d2dc73c1e2e9820594c894f75870c350891ed20b394d41b27a4ebc6a",
+        "width": 1600
+    },
+    {
+        "file": "sample_003.jpg",
+        "height": 1440,
+        "sha256": "a29b47ec3f75050afcdcc78b8b7c769a9c1bb7accde9c5a92189e45382bfcf93",
+        "width": 2560
+    },
+    {
+        "file": "sample_004.png",
+        "height": 1600,
+        "sha256": "8a6738cdfbb68d7f98d0ac4cd5d3d9e452d8b85124a73104068e26db38577770",
+        "width": 2400
+    },
+    {
+        "file": "sample_005.jpg",
+        "height": 2400,
+        "sha256": "b853badf568296871d69ac01557a5ed005cca31156d07bf912807ba22cd95254",
+        "width": 1600
+    }
+]

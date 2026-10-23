@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "preferences.h"
 #include <QtWidgets>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QDesktopServices>
@@ -7,13 +8,24 @@
 #include <QImageWriter>
 
 namespace imagebatch {
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+MainWindow::MainWindow(QWidget *parent, const QString &settingsFile) : QMainWindow(parent), settingsFile_(settingsFile) {
     qRegisterMetaType<FileResult>();
     setWindowTitle(QStringLiteral("ImageBatch %1 · 图片批处理工具").arg(IMAGEBATCH_VERSION));
     resize(1180, 820);
-    setMinimumSize(1000, 780);
+    setMinimumSize(860, 520);
+    setAcceptDrops(true);
+    if (settingsFile_.isEmpty() && !qEnvironmentVariableIsSet("IMAGEBATCH_NO_SETTINGS") &&
+        !QCoreApplication::arguments().contains("--self-test"))
+        settingsFile_ = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/settings.ini";
+    auto *scroll = new QScrollArea;
+    scroll->setObjectName("contentScroll"); scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
     auto *central = new QWidget;
-    setCentralWidget(central);
+    central->setObjectName("contentPanel"); central->setMinimumSize(830, 680);
+    scroll->setWidget(central);
+    auto *shell = new QWidget;
+    auto *outer = new QVBoxLayout(shell); outer->setContentsMargins(0, 0, 0, 0); outer->setSpacing(0);
+    outer->addWidget(scroll, 1); setCentralWidget(shell);
     auto *root = new QVBoxLayout(central);
     root->setContentsMargins(20, 16, 20, 16);
     root->setSpacing(10);
@@ -34,6 +46,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     import_ = new QPushButton(QStringLiteral("导入图片"));
     import_->setObjectName("importButton");
     outputBrowse_ = new QPushButton(QStringLiteral("更改位置"));
+    addFiles_ = new QPushButton(QStringLiteral("选择图片…"));
+    addFiles_->setObjectName("addFilesButton");
     folders->addWidget(new QLabel(QStringLiteral("图片来源")), 0, 0);
     folders->addWidget(input_, 0, 1);
     folders->addWidget(browse_, 0, 2);
@@ -41,6 +55,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     folders->addWidget(new QLabel(QStringLiteral("输出目录")), 1, 0);
     folders->addWidget(output_, 1, 1, 1, 2);
     folders->addWidget(outputBrowse_, 1, 3);
+    auto *importHint = new QLabel(QStringLiteral("可多选图片，也可拖入图片或文件夹。导入文件夹替换列表，添加图片追加到列表。"));
+    importHint->setWordWrap(true); importHint->setObjectName("hint");
+    folders->addWidget(importHint, 2, 0, 1, 3); folders->addWidget(addFiles_, 2, 3);
     root->addWidget(folderBox);
     auto *body = new QHBoxLayout;
     body->setSpacing(14);
@@ -48,6 +65,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     auto *listLayout = new QVBoxLayout(listBox);
     count_ = new QLabel(QStringLiteral("尚未导入图片"));
     listLayout->addWidget(count_);
+    auto *selection = new QHBoxLayout;
+    selectAll_ = new QPushButton(QStringLiteral("全选")); selectAll_->setObjectName("selectAllButton");
+    selectNone_ = new QPushButton(QStringLiteral("全不选")); selectNone_->setObjectName("selectNoneButton");
+    remove_ = new QPushButton(QStringLiteral("移除勾选")); remove_->setObjectName("removeButton");
+    clear_ = new QPushButton(QStringLiteral("清空")); clear_->setObjectName("clearButton");
+    for (auto *button : {selectAll_, selectNone_, remove_, clear_}) {
+        button->setStyleSheet("padding:5px 7px;"); selection->addWidget(button);
+    }
+    listLayout->addLayout(selection);
     table_ = new QTableWidget(0, 3);
     table_->setObjectName("fileTable");
     table_->setHorizontalHeaderLabels({QStringLiteral("文件名"), QStringLiteral("状态"), QStringLiteral("耗时 ms")});
@@ -61,7 +87,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     table_->setAlternatingRowColors(true);
     table_->setWordWrap(false);
     listLayout->addWidget(table_);
-    auto *listHint = new QLabel(QStringLiteral("支持 JPG / JPEG / PNG / BMP\n仅导入当前目录；点击文件查看预览"));
+    details_ = new QPlainTextEdit;
+    details_->setObjectName("fileDetails"); details_->setReadOnly(true);
+    details_->setPlainText(QStringLiteral("点击图片查看路径和处理详情。"));
+    details_->setFixedHeight(80);
+    listLayout->addWidget(details_);
+    auto *listHint = new QLabel(QStringLiteral("支持 JPG / JPEG / PNG / BMP\n仅扫描当前目录；仅处理已勾选的图片"));
     listHint->setObjectName("hint");
     listLayout->addWidget(listHint);
     body->addWidget(listBox, 4);
@@ -76,6 +107,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     format_ = new QComboBox;
     format_->setObjectName("outputFormat");
     format_->addItem("JPG", "jpg"); format_->addItem("PNG", "png"); format_->addItem("BMP", "bmp");
+    format_->addItem(QStringLiteral("保持原格式"), "original");
     quality_ = new QSpinBox;
     quality_->setObjectName("jpegQuality"); quality_->setRange(1, 100); quality_->setValue(90);
     watermarkEnabled_ = new QCheckBox(QStringLiteral("启用文字水印"));
@@ -111,6 +143,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     auto *hint = new QLabel(QStringLiteral("PNG 保留透明度；JPG / BMP 使用白底。预算用于估算批处理缓冲。"));
     hint->setWordWrap(true); hint->setObjectName("hint");
     settings->addWidget(hint, 4, 0, 1, 4);
+    auto *reset = new QPushButton(QStringLiteral("恢复默认参数")); reset->setObjectName("resetOptionsButton");
+    settings->addWidget(reset, 5, 2, 1, 2);
+    connect(reset, &QPushButton::clicked, this, [this] {
+        edge_->setValue(1920); quality_->setValue(90); format_->setCurrentIndex(0);
+        workers_->setValue(2); budget_->setValue(512); watermarkEnabled_->setChecked(false);
+        watermark_->clear(); watermarkPosition_->setCurrentIndex(0);
+    });
     right->addWidget(optionBox);
 
     auto *previewBox = new QGroupBox(QStringLiteral("04  效果预览"));
@@ -136,28 +175,32 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     body->addLayout(right, 7);
     root->addLayout(body, 1);
 
+    auto *footer = new QWidget; footer->setObjectName("footerPanel");
+    auto *footerLayout = new QVBoxLayout(footer); footerLayout->setContentsMargins(20, 6, 20, 12);
+    outer->addWidget(footer);
     progress_ = new QProgressBar;
     progress_->setObjectName("batchProgress"); progress_->setValue(0);
-    root->addWidget(progress_);
+    footerLayout->addWidget(progress_);
     status_ = new QLabel(QStringLiteral("准备就绪。请选择图片文件夹。"));
     status_->setObjectName("statusText"); status_->setWordWrap(true);
-    root->addWidget(status_);
+    footerLayout->addWidget(status_);
     metrics_ = new QLabel(QStringLiteral("可设置 1～8 个并行任务；未开始处理。"));
     metrics_->setObjectName("metricsText"); metrics_->setWordWrap(true);
-    root->addWidget(metrics_);
+    footerLayout->addWidget(metrics_);
     auto *actions = new QHBoxLayout;
     openOutput_ = new QPushButton(QStringLiteral("打开输出目录"));
     openReport_ = new QPushButton(QStringLiteral("查看报告"));
     openReport_->setEnabled(false);
-    start_ = new QPushButton(QStringLiteral("开始批量处理"));
+    start_ = new QPushButton(QStringLiteral("处理勾选图片"));
     start_->setObjectName("startButton"); start_->setProperty("primary", true); start_->setEnabled(false);
     cancel_ = new QPushButton(QStringLiteral("取消后续任务"));
     cancel_->setObjectName("cancelButton"); cancel_->setEnabled(false);
+    retry_ = new QPushButton(QStringLiteral("重试失败/取消")); retry_->setObjectName("retryButton"); retry_->setEnabled(false);
     actions->addWidget(openOutput_); actions->addWidget(openReport_); actions->addStretch();
-    actions->addWidget(cancel_); actions->addWidget(start_);
-    root->addLayout(actions);
+    actions->addWidget(retry_); actions->addWidget(cancel_); actions->addWidget(start_);
+    footerLayout->addLayout(actions);
     setStyleSheet(QStringLiteral(
-        "QMainWindow{background:#f4f7fb;} QWidget{font-family:'Microsoft YaHei UI','Segoe UI';font-size:13px;color:#20334c;}"
+        "QMainWindow,QWidget#contentPanel,QWidget#footerPanel{background:#f4f7fb;} QWidget{font-family:'Microsoft YaHei UI','Segoe UI';font-size:13px;color:#20334c;}"
         "QLabel#title{font-size:26px;font-weight:700;color:#153453;} QLabel#hint{font-size:12px;color:#62758b;}"
         "QGroupBox{background:white;border:1px solid #dce4ee;border-radius:10px;margin-top:13px;padding:13px 10px 10px;}"
         "QGroupBox::title{subcontrol-origin:margin;left:15px;padding:0 5px;font-weight:600;}"
@@ -179,18 +222,47 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(import_, &QPushButton::clicked, this, &MainWindow::importFolder);
     connect(input_, &QLineEdit::returnPressed, this, &MainWindow::importFolder);
     connect(input_, &QLineEdit::textEdited, this, [this] {
-        start_->setEnabled(false);
+        folderDirty_ = true;
+        refreshSelection();
         status_->setText(QStringLiteral("来源路径已修改，请点击“导入图片”刷新列表。"));
     });
+    connect(addFiles_, &QPushButton::clicked, this, [this] {
+        const auto paths = QFileDialog::getOpenFileNames(this, QStringLiteral("选择图片（可多选）"), input_->text(),
+            QStringLiteral("图片 (*.jpg *.jpeg *.png *.bmp *.JPG *.JPEG *.PNG *.BMP)"));
+        if (!paths.isEmpty()) addPaths(paths);
+    });
+    connect(selectAll_, &QPushButton::clicked, this, [this] {
+        updatingTable_ = true;
+        for (int row = 0; row < table_->rowCount(); ++row) table_->item(row, 0)->setCheckState(Qt::Checked);
+        updatingTable_ = false; refreshSelection();
+    });
+    connect(selectNone_, &QPushButton::clicked, this, [this] {
+        updatingTable_ = true;
+        for (int row = 0; row < table_->rowCount(); ++row) table_->item(row, 0)->setCheckState(Qt::Unchecked);
+        updatingTable_ = false; refreshSelection();
+    });
+    connect(remove_, &QPushButton::clicked, this, [this] {
+        updatingTable_ = true;
+        for (int row = table_->rowCount() - 1; row >= 0; --row) if (table_->item(row, 0)->checkState() == Qt::Checked) {
+            files_.removeAt(row); results_.removeAt(row); table_->removeRow(row);
+        }
+        updatingTable_ = false; ++previewVersion_;
+        if (files_.isEmpty()) clearFiles(); else { refreshSelection(); showDetails(); schedulePreview(); }
+    });
+    connect(clear_, &QPushButton::clicked, this, &MainWindow::clearFiles);
+    connect(table_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
+        if (!updatingTable_ && item->column() == 0) refreshSelection();
+    });
+    connect(retry_, &QPushButton::clicked, this, [this] { startBatch(true); });
     connect(outputBrowse_, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getExistingDirectory(this, QStringLiteral("选择输出文件夹"), output_->text());
         if (!path.isEmpty()) output_->setText(path);
     });
-    connect(table_, &QTableWidget::currentCellChanged, this, [this] { schedulePreview(); });
+    connect(table_, &QTableWidget::currentCellChanged, this, [this] { showDetails(); schedulePreview(); });
     connect(edge_, &QSpinBox::valueChanged, this, [this] { schedulePreview(); });
     connect(quality_, &QSpinBox::valueChanged, this, [this] { schedulePreview(); });
     connect(format_, &QComboBox::currentIndexChanged, this, [this] {
-        quality_->setEnabled(!busy() && format_->currentData().toString() == "jpg"); schedulePreview();
+        quality_->setEnabled(!busy() && (format_->currentData().toString() == "jpg" || format_->currentData().toString() == "original")); schedulePreview();
     });
     connect(watermarkEnabled_, &QCheckBox::toggled, this, [this](bool checked) {
         watermark_->setEnabled(checked && !busy()); schedulePreview();
@@ -198,7 +270,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
     connect(watermarkPosition_, &QComboBox::currentIndexChanged, this, [this] { schedulePreview(); });
     connect(watermark_, &QLineEdit::textChanged, this, [this] { schedulePreview(); });
-    connect(start_, &QPushButton::clicked, this, &MainWindow::startBatch);
+    connect(start_, &QPushButton::clicked, this, [this] { startBatch(); });
     connect(cancel_, &QPushButton::clicked, this, [this] {
         if (cancelled_) cancelled_->store(true);
         cancel_->setEnabled(false);
@@ -226,10 +298,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             previewBefore_ = p.before; previewAfter_ = p.after;
             renderPreviews();
             beforeInfo_->setText(QStringLiteral("原图  %1 × %2").arg(p.inputSize.width()).arg(p.inputSize.height()));
-            afterInfo_->setText(QStringLiteral("输出  %1 × %2  ·  %3").arg(p.outputSize.width()).arg(p.outputSize.height()).arg(format_->currentText()));
+            afterInfo_->setText(QStringLiteral("输出  %1 × %2  ·  %3").arg(p.outputSize.width()).arg(p.outputSize.height()).arg(p.format.toUpper()));
         }
         emit previewReady();
     });
+    restorePreferences();
+    refreshSelection();
+    // File drops belong to the importer, including drops over editable fields.
+    for (auto *widget : findChildren<QWidget *>()) widget->setAcceptDrops(false);
+    const auto available = QGuiApplication::primaryScreen()->availableGeometry().size();
+    resize(qMin(1180, available.width()), qMin(900, available.height()));
 }
 MainWindow::~MainWindow() {
     if (cancelled_) cancelled_->store(true);
@@ -254,31 +332,125 @@ BatchSettings MainWindow::batchSettings() const {
 void MainWindow::importFolder() {
     if (busy()) return;
     QString error;
-    files_ = scanImages(input_->text(), &error);
-    ++previewVersion_;
-    table_->setRowCount(0);
+    const auto files = scanImages(input_->text(), &error);
+    clearFiles(); folderDirty_ = false;
+    output_->setText(error.isEmpty() ? QDir(input_->text()).absoluteFilePath("processed") : QString());
+    appendFiles(files);
+    if (error.isEmpty()) {
+        status_->setText(files_.isEmpty() ? QStringLiteral("该文件夹没有支持的图片。")
+                                         : QStringLiteral("导入完成。勾选需要处理的图片后开始。"));
+    } else status_->setText(error);
+}
+void MainWindow::clearFiles() {
+    if (busy()) return;
+    updatingTable_ = true; ++previewVersion_; previewTimer_.stop();
+    files_.clear(); results_.clear(); batchRows_.clear(); table_->setRowCount(0);
     previewBefore_ = {}; previewAfter_ = {};
     before_->setText(QStringLiteral("请选择图片")); after_->setText(QStringLiteral("暂无预览"));
     beforeInfo_->setText(QStringLiteral("原图")); afterInfo_->setText(QStringLiteral("处理效果"));
-    for (const auto &file : files_) {
+    details_->setPlainText(QStringLiteral("点击图片查看路径和处理详情。"));
+    report_.clear(); openReport_->setEnabled(false); activeTasks_.clear();
+    progress_->setRange(0, 100); progress_->setValue(0);
+    status_->setText(QStringLiteral("列表已清空，原文件和已生成结果均保留。"));
+    metrics_->setText(QStringLiteral("就绪，可调整并行任务数及批处理预算。"));
+    updatingTable_ = false; refreshSelection();
+}
+void MainWindow::appendFiles(const QStringList &files) {
+    updatingTable_ = true;
+    QSet<QString> known;
+    const auto identity = [](const QString &path) {
+        QString value = QFileInfo(path).canonicalFilePath();
+        if (value.isEmpty()) value = QFileInfo(path).absoluteFilePath();
+#ifdef Q_OS_WIN
+        value = value.toCaseFolded();
+#endif
+        return value;
+    };
+    for (const auto &path : files_) known.insert(identity(path));
+    for (const auto &file : files) {
+        const QString key = identity(file);
+        if (known.contains(key)) continue;
+        known.insert(key); files_ << QFileInfo(file).absoluteFilePath(); results_.append(FileResult{});
         const int row = table_->rowCount(); table_->insertRow(row);
         auto *item = new QTableWidgetItem(QFileInfo(file).fileName());
         item->setToolTip(file); item->setData(Qt::UserRole, file);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable); item->setCheckState(Qt::Checked);
         table_->setItem(row, 0, item);
         table_->setItem(row, 1, new QTableWidgetItem(QStringLiteral("待处理")));
         table_->setItem(row, 2, new QTableWidgetItem("—"));
     }
-    count_->setText(QStringLiteral("共 %1 张图片").arg(files_.size()));
-    start_->setEnabled(!files_.isEmpty());
-    progress_->setValue(0);
-    report_.clear(); openReport_->setEnabled(false);
-    activeTasks_.clear(); metrics_->setText(QStringLiteral("就绪，可调整并行任务数及批处理预算。"));
-    if (error.isEmpty()) {
-        output_->setText(QDir(input_->text()).absoluteFilePath("processed"));
-        status_->setText(files_.isEmpty() ? QStringLiteral("该文件夹没有支持的图片。")
-                                         : QStringLiteral("导入完成。调整参数后可开始批量处理。"));
-    } else status_->setText(error);
-    if (!files_.isEmpty()) table_->selectRow(0);
+    updatingTable_ = false; refreshSelection();
+    if (!files_.isEmpty() && table_->currentRow() < 0) table_->selectRow(0);
+}
+void MainWindow::addPaths(const QStringList &paths) {
+    if (busy() || paths.isEmpty()) return;
+    QStringList accepted; int unsupported = 0;
+    for (const auto &path : paths) {
+        const QFileInfo info(path);
+        if (info.isDir()) accepted.append(scanImages(path));
+        else if (info.isFile() && info.isReadable() && QStringList{"jpg", "jpeg", "png", "bmp"}.contains(info.suffix().toLower()))
+            accepted.append(info.absoluteFilePath());
+        else ++unsupported;
+    }
+    if (accepted.isEmpty()) { status_->setText(QStringLiteral("没有可添加的图片（仅支持 JPG / JPEG / PNG / BMP，不扫描子文件夹）。")); return; }
+    if (files_.isEmpty()) {
+        input_->setText(QFileInfo(accepted.first()).absolutePath());
+        output_->setText(QDir(input_->text()).filePath("processed"));
+    }
+    if (folderDirty_ && !files_.isEmpty()) input_->setText(QFileInfo(files_.first()).absolutePath());
+    folderDirty_ = false;
+    const auto previous = files_.size(); appendFiles(accepted);
+    status_->setText(QStringLiteral("已添加 %1 张；重复图片已忽略。%2")
+        .arg(files_.size() - previous).arg(unsupported ? QStringLiteral("已跳过 %1 个不支持的项目。").arg(unsupported) : QString()));
+}
+void MainWindow::refreshSelection() {
+    int checked = 0, retryable = 0;
+    for (int row = 0; row < table_->rowCount(); ++row) if (table_->item(row, 0)->checkState() == Qt::Checked) {
+        ++checked;
+        if (results_[row].status == "failed" || results_[row].status == "cancelled") ++retryable;
+    }
+    count_->setText(QStringLiteral("共 %1 张，已勾选 %2 张").arg(files_.size()).arg(checked));
+    start_->setEnabled(!busy() && !folderDirty_ && checked > 0);
+    retry_->setEnabled(!busy() && !folderDirty_ && retryable > 0);
+    remove_->setEnabled(!busy() && checked > 0); clear_->setEnabled(!busy() && !files_.isEmpty());
+}
+void MainWindow::showDetails() {
+    const int row = table_->currentRow();
+    if (row < 0 || row >= files_.size()) return;
+    const auto &result = results_[row];
+    QString text = QStringLiteral("输入：") + files_[row];
+    if (!result.outputPath.isEmpty()) text += QStringLiteral("\n输出：") + result.outputPath;
+    if (!result.error.isEmpty()) text += QStringLiteral("\n原因：") + result.error;
+    details_->setPlainText(text);
+}
+void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
+    if (!busy() && event->mimeData()->hasUrls())
+        for (const auto &url : event->mimeData()->urls()) if (url.isLocalFile()) { event->acceptProposedAction(); return; }
+    event->ignore();
+}
+void MainWindow::dropEvent(QDropEvent *event) {
+    if (busy()) { event->ignore(); return; }
+    QStringList paths;
+    for (const auto &url : event->mimeData()->urls()) if (url.isLocalFile()) paths << url.toLocalFile();
+    if (paths.isEmpty()) { event->ignore(); return; }
+    addPaths(paths); event->acceptProposedAction();
+}
+void MainWindow::restorePreferences() {
+    if (settingsFile_.isEmpty()) return;
+    const auto p = readPreferences(settingsFile_);
+    edge_->setValue(p.options.maxEdge); quality_->setValue(p.options.jpegQuality);
+    format_->setCurrentIndex(format_->findData(p.options.format));
+    watermark_->setText(p.options.watermark); watermarkEnabled_->setChecked(p.watermarkEnabled);
+    watermarkPosition_->setCurrentIndex(static_cast<int>(p.options.watermarkPosition));
+    workers_->setValue(p.batch.workers); budget_->setValue(static_cast<int>(p.batch.memoryBudgetBytes / 1024 / 1024));
+    input_->setText(p.lastFolder);
+}
+void MainWindow::savePreferences() {
+    if (settingsFile_.isEmpty()) return;
+    Preferences p; p.options = options(); p.options.watermark = watermark_->text();
+    p.watermarkEnabled = watermarkEnabled_->isChecked(); p.batch = batchSettings(); p.lastFolder = input_->text();
+    QString error;
+    if (!writePreferences(settingsFile_, p, &error)) status_->setText(error + QStringLiteral("；本次图片处理结果不受影响。"));
 }
 void MainWindow::schedulePreview() {
     ++previewVersion_;
@@ -293,11 +465,15 @@ void MainWindow::beginPreview() {
     runningPreviewVersion_ = previewVersion_;
     previewWatcher_.setFuture(QtConcurrent::run([file, o] {
         Preview p;
+        Options effective = o;
+        effective.format = outputFormatForFile(file, o, &p.error);
+        if (effective.format.isEmpty()) return p;
+        p.format = effective.format;
         QImage original = loadImage(file, &p.error);
         if (original.isNull()) return p;
-        QImage transformed = transformImage(original, o);
+        QImage transformed = transformImage(original, effective);
         if (transformed.isNull()) { p.error = QStringLiteral("无法生成预览"); return p; }
-        if (o.format == "jpg") {
+        if (effective.format == "jpg") {
             QByteArray encoded;
             QBuffer buffer(&encoded); buffer.open(QIODevice::WriteOnly);
             QImageWriter writer(&buffer, "jpg"); writer.setQuality(o.jpegQuality);
@@ -322,46 +498,64 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
     if (!previewBefore_.isNull()) QTimer::singleShot(0, this, [this] { renderPreviews(); });
 }
 void MainWindow::setBusy(bool working) {
-    for (QWidget *w : QList<QWidget *>{input_, output_, edge_, format_, workers_, budget_, watermarkEnabled_, import_, browse_, outputBrowse_})
+    for (QWidget *w : QList<QWidget *>{input_, output_, edge_, format_, workers_, budget_, watermarkEnabled_, import_, browse_, outputBrowse_, addFiles_, selectAll_, selectNone_, table_})
         w->setEnabled(!working);
-    quality_->setEnabled(!working && format_->currentData().toString() == "jpg");
+    findChild<QPushButton *>("resetOptionsButton")->setEnabled(!working);
+    quality_->setEnabled(!working && (format_->currentData().toString() == "jpg" || format_->currentData().toString() == "original"));
     watermark_->setEnabled(!working && watermarkEnabled_->isChecked());
     watermarkPosition_->setEnabled(!working && watermarkEnabled_->isChecked());
-    start_->setEnabled(!working && !files_.isEmpty()); cancel_->setEnabled(working);
+    refreshSelection(); cancel_->setEnabled(working);
     openOutput_->setEnabled(!working); openReport_->setEnabled(!working && !report_.isEmpty());
 }
-void MainWindow::startBatch() {
-    if (busy() || files_.isEmpty()) return;
+void MainWindow::startBatch(bool retry) {
+    if (busy() || files_.isEmpty() || folderDirty_) return;
+    batchRows_.clear(); QStringList selected;
+    for (int row = 0; row < files_.size(); ++row)
+        if (table_->item(row, 0)->checkState() == Qt::Checked &&
+            (!retry || results_[row].status == "failed" || results_[row].status == "cancelled")) {
+            batchRows_ << row; selected << files_[row];
+        }
+    if (selected.isEmpty()) { status_->setText(QStringLiteral("请勾选需要处理的图片。")); return; }
     const QString out = output_->text().trimmed();
     if (out.isEmpty()) { status_->setText(QStringLiteral("请选择输出文件夹。")); return; }
-    const QString inputCanonical = QFileInfo(input_->text()).canonicalFilePath();
     const QString outputCanonical = QFileInfo(out).canonicalFilePath();
-    if ((!inputCanonical.isEmpty() && inputCanonical == outputCanonical) ||
-        QDir(input_->text()).absolutePath() == QDir(out).absolutePath()) {
-        status_->setText(QStringLiteral("输出文件夹必须与原图文件夹不同。")); return;
+    for (const auto &file : selected) {
+        const QString parent = QFileInfo(file).absolutePath();
+        const QString canonical = QFileInfo(parent).canonicalFilePath();
+        if ((!canonical.isEmpty() && canonical.compare(outputCanonical, Qt::CaseInsensitive) == 0) ||
+            parent.compare(QDir(out).absolutePath(), Qt::CaseInsensitive) == 0) {
+            status_->setText(QStringLiteral("输出文件夹必须与原图文件夹不同。")); return;
+        }
     }
     if (!QDir().mkpath(out)) { status_->setText(QStringLiteral("无法创建输出文件夹，请检查路径和权限。")); return; }
+    { QTemporaryFile probe(QDir(out).filePath(".imagebatch-write-check-XXXXXX"));
+      if (!probe.open()) { status_->setText(QStringLiteral("输出文件夹不可写：") + probe.errorString()); return; } }
     const auto o = options();
     const auto error = validateOptions(o);
     if (!error.isEmpty()) { status_->setText(error); return; }
     report_.clear();
     activeTasks_.clear();
-    progress_->setRange(0, files_.size()); progress_->setValue(0);
-    for (int row = 0; row < table_->rowCount(); ++row) {
+    progress_->setRange(0, selected.size()); progress_->setValue(0);
+    for (const int row : batchRows_) {
+        results_[row] = FileResult{};
         table_->item(row, 1)->setText(QStringLiteral("待处理"));
         table_->item(row, 1)->setToolTip({});
         table_->item(row, 2)->setText("—");
     }
     cancelled_ = std::make_shared<std::atomic_bool>(false);
     thread_ = new QThread(this);
-    auto *worker = new BatchWorker(files_, out, o, cancelled_, batchSettings());
+    savePreferences();
+    auto *worker = new BatchWorker(selected, out, o, cancelled_, batchSettings());
     worker->moveToThread(thread_);
     connect(thread_, &QThread::started, worker, &BatchWorker::run);
-    connect(worker, &BatchWorker::progress, this, &MainWindow::updateResult);
+    connect(worker, &BatchWorker::progress, this, [this](int done, int total, FileResult result) {
+        if (result.index < 0 || result.index >= batchRows_.size()) return;
+        result.index = batchRows_[result.index]; updateResult(done, total, result);
+    });
     connect(worker, &BatchWorker::taskStarted, this, [this](int index) {
-        if (index >= 0 && index < table_->rowCount()) {
-            activeTasks_.insert(index);
-            table_->item(index, 1)->setText(QStringLiteral("处理中"));
+        if (index >= 0 && index < batchRows_.size()) {
+            const int row = batchRows_[index]; activeTasks_.insert(row);
+            table_->item(row, 1)->setText(QStringLiteral("处理中"));
         }
     });
     connect(worker, &BatchWorker::metrics, this, [this](qint64 elapsed, int active, quint64 reserved, int queued, const QString &json) {
@@ -382,15 +576,17 @@ void MainWindow::startBatch() {
     connect(thread_, &QThread::finished, this, [this] {
         thread_->deleteLater(); thread_ = nullptr;
         setBusy(false); schedulePreview(); emit batchComplete();
+        if (closeAfterBatch_) QTimer::singleShot(0, this, &QWidget::close);
     });
     setBusy(true);
-    status_->setText(QStringLiteral("正在并行处理图片；可以取消尚未开始的任务。"));
+    status_->setText(QStringLiteral("正在处理 %1 张勾选图片；可以取消尚未开始的任务。").arg(selected.size()));
     thread_->start();
 }
 void MainWindow::updateResult(int done, int total, const FileResult &r) {
     progress_->setMaximum(total); progress_->setValue(done);
     const int row = r.index >= 0 ? r.index : files_.indexOf(r.inputPath);
-    if (row < 0) return;
+    if (row < 0 || row >= files_.size()) return;
+    results_[row] = r;
     activeTasks_.remove(row);
     auto *item = table_->item(row, 1);
     item->setText(r.status == "success" ? QStringLiteral("成功") : r.status == "cancelled" ? QStringLiteral("取消") : QStringLiteral("失败"));
@@ -398,13 +594,16 @@ void MainWindow::updateResult(int done, int total, const FileResult &r) {
     table_->item(row, 2)->setText(r.status == "success" ? QString::number(r.elapsedMs) : "—");
     metrics_->setText(QStringLiteral("正在处理 %1  |  等待 %2  |  已完成 %3 / %4")
         .arg(activeTasks_.size()).arg(std::max(0, total - done - static_cast<int>(activeTasks_.size()))).arg(done).arg(total));
+    if (row == table_->currentRow()) showDetails();
 }
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (busy()) {
+        closeAfterBatch_ = true;
         if (cancelled_) cancelled_->store(true);
-        status_->setText(QStringLiteral("正在停止任务并保存报告，请在任务结束后关闭窗口。"));
+        status_->setText(QStringLiteral("正在停止后续任务并保存报告，完成后窗口将自动关闭。"));
         cancel_->setEnabled(false); event->ignore(); return;
     }
+    savePreferences();
     QMainWindow::closeEvent(event);
 }
 }

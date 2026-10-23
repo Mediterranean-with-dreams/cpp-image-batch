@@ -6,6 +6,8 @@
     "passed": true,
     "platform": "windows",
     "qt_version": "6.8.3",
-    "reason": "Parallel native GUI batch: 3 successful images, 1 corrupt-image failure, CSV/JSON verified and originals unchanged.",
-    "version": "1.1.0"
+    "reason": "Native GUI parallel batch, failed-only retry without duplicates, selected original-format PNG with transparency, reports and original hashes verified.",
+    "retry_without_duplicates_valid": true,
+    "subset_original_format_valid": true,
+    "version": "1.2.0"
 }

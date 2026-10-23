@@ -24,6 +24,7 @@ struct FileResult {
 };
 QString validateOptions(const Options &options);
 QStringList scanImages(const QString &directory, QString *error = nullptr);
+QString outputFormatForFile(const QString &path, const Options &options, QString *error = nullptr);
 QImage loadImage(const QString &path, QString *error = nullptr);
 QImage transformImage(const QImage &input, const Options &options);
 FileResult processFile(const QString &input, const QString &outputDirectory,

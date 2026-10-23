@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "preferences.h"
 #include <QtTest>
 #include <QtWidgets>
 #include <QCryptographicHash>
@@ -43,7 +44,10 @@ static QImage scene(int width = 2400, int height = 1600) {
 class ImageBatchTests : public QObject {
     Q_OBJECT
 private slots:
-    void initTestCase() { QImageReader::setAllocationLimit(256); QThreadPool::globalInstance()->setMaxThreadCount(1); }
+    void initTestCase() {
+        qputenv("IMAGEBATCH_NO_SETTINGS", "1"); // Never read or write a user's app settings during tests.
+        QImageReader::setAllocationLimit(256); QThreadPool::globalInstance()->setMaxThreadCount(1);
+    }
     void defaultsAndValidation() {
         Options o;
         QCOMPARE(o.maxEdge, 1920); QCOMPARE(o.jpegQuality, 90); QVERIFY(validateOptions(o).isEmpty());
@@ -335,6 +339,146 @@ private slots:
         QCOMPARE(summary.succeeded, 1); QVERIFY(summary.error.contains(QStringLiteral("通知异常")));
         QVERIFY(QFileInfo::exists(summary.metricsReport));
     }
+    void preserveOriginalFormatAndTransparency() {
+        QTemporaryDir dir; Options options; options.format = "original"; options.maxEdge = 100;
+        QImage image(160, 100, QImage::Format_ARGB32); image.fill(Qt::transparent);
+        { QPainter painter(&image); painter.fillRect(30, 20, 60, 50, Qt::green); }
+        for (const auto &format : QStringList{"jpg", "png", "bmp"}) {
+            const auto input = dir.filePath("sample." + format); QVERIFY(image.save(input));
+            const auto result = processFile(input, dir.filePath("out"), options);
+            QCOMPARE(result.status, QString("success"));
+            QCOMPARE(QFileInfo(result.outputPath).suffix(), format);
+            QCOMPARE(QImage(result.outputPath).size(), QSize(100, 62)); // Integer dimensions round down here (62.5 pixels).
+            if (format == "png") QCOMPARE(QImage(result.outputPath).pixelColor(0, 0).alpha(), 0);
+            else QVERIFY(QImage(result.outputPath).pixelColor(0, 0).alpha() == 255);
+        }
+        const auto misleading = dir.filePath("actually_png.jpg"); QVERIFY(image.save(misleading, "PNG"));
+        const auto result = processFile(misleading, dir.filePath("out"), options);
+        QCOMPARE(result.status, QString("success")); QVERIFY(result.outputPath.endsWith(".png"));
+        QFile broken(dir.filePath("broken.png")); QVERIFY(broken.open(QIODevice::WriteOnly)); broken.write("broken"); broken.close();
+        QCOMPARE(processFile(broken.fileName(), dir.filePath("out"), options).status, QString("failed"));
+    }
+    void preferencesRoundTripAndInvalidData() {
+        QTemporaryDir dir; const auto path = dir.filePath("settings.ini");
+        Preferences p; p.options.maxEdge = 1280; p.options.format = "original"; p.options.jpegQuality = 81;
+        p.options.watermark = QStringLiteral("我的图片"); p.options.watermarkPosition = WatermarkPosition::TopLeft;
+        p.watermarkEnabled = true; p.batch.workers = 3; p.batch.memoryBudgetBytes = 256ULL * 1024 * 1024;
+        p.lastFolder = dir.filePath(QStringLiteral("中文 space"));
+        QString error; QVERIFY(writePreferences(path, p, &error)); QVERIFY(error.isEmpty());
+        const auto restored = readPreferences(path);
+        QCOMPARE(restored.options.maxEdge, 1280); QCOMPARE(restored.options.format, QString("original"));
+        QCOMPARE(restored.options.watermark, p.options.watermark); QVERIFY(restored.watermarkEnabled);
+        QCOMPARE(restored.options.watermarkPosition, WatermarkPosition::TopLeft);
+        QCOMPARE(restored.batch.workers, 3); QCOMPARE(restored.batch.memoryBudgetBytes, p.batch.memoryBudgetBytes);
+        QCOMPARE(restored.lastFolder, p.lastFolder);
+        { QSettings settings(path, QSettings::IniFormat);
+          settings.setValue("image/maxEdge", "bad"); settings.setValue("image/quality", 0);
+          settings.setValue("image/format", "tiff"); settings.setValue("batch/workers", 999);
+          settings.setValue("batch/budgetMiB", -1); settings.setValue("image/position", 999); settings.sync(); }
+        const auto invalid = readPreferences(path);
+        QCOMPARE(invalid.options.maxEdge, 1920); QCOMPARE(invalid.options.jpegQuality, 90);
+        QCOMPARE(invalid.options.format, QString("jpg")); QCOMPARE(invalid.batch.workers, 2);
+        QCOMPARE(invalid.batch.memoryBudgetBytes, quint64(512) * 1024 * 1024);
+        QCOMPARE(invalid.options.watermarkPosition, WatermarkPosition::BottomRight);
+        QFile blocker(dir.filePath("blocker")); QVERIFY(blocker.open(QIODevice::WriteOnly)); blocker.close();
+        QVERIFY(!writePreferences(dir.filePath("blocker/settings.ini"), p, &error)); QVERIFY(!error.isEmpty());
+    }
+    void guiDropDeduplicateAndRemove() {
+        QTemporaryDir dir;
+        const auto first = dir.filePath("a.png"), second = dir.filePath("b.png");
+        QVERIFY(scene(160, 100).save(first)); QVERIFY(scene(160, 100).save(second));
+        QVERIFY(QDir().mkpath(dir.filePath("sub"))); QVERIFY(scene(160, 100).save(dir.filePath("sub/nested.png")));
+        MainWindow window; window.show();
+        QMimeData mime; mime.setUrls({QUrl::fromLocalFile(first), QUrl::fromLocalFile(dir.path()), QUrl("https://example.invalid/image.png")});
+        QDragEnterEvent enter(QPoint(20, 20), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&window, &enter); QVERIFY(enter.isAccepted());
+        QDropEvent drop(QPointF(20, 20), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&window, &drop); QVERIFY(drop.isAccepted());
+        auto *table = window.findChild<QTableWidget *>("fileTable"); QCOMPARE(table->rowCount(), 2);
+        window.addPaths({first, second, dir.filePath("missing.png")}); QCOMPARE(table->rowCount(), 2);
+        window.findChild<QPushButton *>("selectNoneButton")->click();
+        QVERIFY(!window.findChild<QPushButton *>("startButton")->isEnabled());
+        table->item(1, 0)->setCheckState(Qt::Checked);
+        window.findChild<QPushButton *>("removeButton")->click();
+        QCOMPARE(table->rowCount(), 1); QVERIFY(QFileInfo::exists(second));
+        window.findChild<QPushButton *>("clearButton")->click();
+        QCOMPARE(table->rowCount(), 0); QVERIFY(QFileInfo::exists(first));
+        QVERIFY(window.findChild<QLabel *>("afterPreview")->pixmap().isNull());
+        window.addPaths({first, dir.filePath("sub/nested.png")});
+        window.findChild<QLineEdit *>("outputPath")->setText(dir.filePath("sub"));
+        window.findChild<QPushButton *>("startButton")->click(); QVERIFY(!window.busy());
+        QVERIFY(window.findChild<QLabel *>("statusText")->text().contains(QStringLiteral("必须与原图")));
+    }
+    void guiSelectedSubsetAndRetry() {
+        QTemporaryDir dir;
+        const auto skipped = dir.filePath("a_skip.png"), good = dir.filePath("b_good.png"), bad = dir.filePath("c_bad.png");
+        QVERIFY(scene(300, 200).save(skipped)); QVERIFY(scene(300, 200).save(good));
+        QFile broken(bad); QVERIFY(broken.open(QIODevice::WriteOnly)); broken.write("broken"); broken.close();
+        MainWindow window; window.show(); window.addPaths({skipped, good, bad});
+        auto *table = window.findChild<QTableWidget *>("fileTable");
+        table->item(0, 0)->setCheckState(Qt::Unchecked);
+        QSignalSpy done(&window, &MainWindow::batchComplete);
+        window.findChild<QPushButton *>("startButton")->click();
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 15000);
+        QCOMPARE(table->item(0, 1)->text(), QStringLiteral("待处理"));
+        QCOMPARE(table->item(1, 1)->text(), QStringLiteral("成功")); QCOMPARE(table->item(2, 1)->text(), QStringLiteral("失败"));
+        table->setCurrentCell(2, 0);
+        QVERIFY(window.findChild<QPlainTextEdit *>("fileDetails")->toPlainText().contains(QStringLiteral("原因")));
+        const auto out = dir.filePath("processed");
+        const auto goodOut = QDir(out).filePath("b_good_processed.jpg"); const auto hash = digest(goodOut);
+        QVERIFY(scene(300, 200).save(bad));
+        auto *retry = window.findChild<QPushButton *>("retryButton"); QVERIFY(retry->isEnabled()); retry->click();
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 2, 15000);
+        QVERIFY(!retry->isEnabled()); QCOMPARE(table->item(2, 1)->text(), QStringLiteral("成功"));
+        QCOMPARE(digest(goodOut), hash); QCOMPARE(QDir(out).entryList({"*.jpg"}, QDir::Files).size(), 2);
+        QVERIFY(!QFileInfo::exists(QDir(out).filePath("a_skip_processed.jpg")));
+        QFile report(window.lastReport()); QVERIFY(report.open(QIODevice::ReadOnly));
+        QCOMPARE(report.readAll().count("\"success\""), 1); // Retry report contains only its own selected attempt.
+    }
+    void guiPreferencesSmallWindowAndAutoClose() {
+        QTemporaryDir dir; const auto settingsFile = dir.filePath("prefs.ini");
+        {
+            MainWindow window(nullptr, settingsFile); window.show(); window.resize(860, 520);
+            auto *scroll = window.findChild<QScrollArea *>("contentScroll");
+            QTRY_VERIFY(scroll->verticalScrollBar()->maximum() > 0);
+            auto *start = window.findChild<QPushButton *>("startButton");
+            QVERIFY(window.rect().contains(start->mapTo(&window, start->rect().center())));
+            QVERIFY(!window.findChild<QLineEdit *>("inputPath")->acceptDrops());
+            const auto artifacts = qEnvironmentVariable("IMAGEBATCH_ARTIFACT_DIR");
+            if (!artifacts.isEmpty()) QVERIFY(window.grab().save(QDir(artifacts).filePath("small-window.png")));
+            window.findChild<QSpinBox *>("maxEdge")->setValue(1280);
+            window.findChild<QComboBox *>("outputFormat")->setCurrentIndex(3);
+            window.findChild<QCheckBox *>("watermarkEnabled")->setChecked(true);
+            window.findChild<QLineEdit *>("watermarkText")->setText(QStringLiteral("设置测试"));
+            window.findChild<QSpinBox *>("workerCount")->setValue(3); window.close();
+        }
+        MainWindow restored(nullptr, settingsFile); restored.show();
+        QCOMPARE(restored.findChild<QSpinBox *>("maxEdge")->value(), 1280);
+        QCOMPARE(restored.findChild<QComboBox *>("outputFormat")->currentData().toString(), QString("original"));
+        QCOMPARE(restored.findChild<QLineEdit *>("watermarkText")->text(), QStringLiteral("设置测试"));
+        restored.findChild<QPushButton *>("resetOptionsButton")->click();
+        QCOMPARE(restored.findChild<QSpinBox *>("maxEdge")->value(), 1920);
+        QCOMPARE(restored.findChild<QSpinBox *>("workerCount")->value(), 2);
+        for (int i = 0; i < 8; ++i) QVERIFY(scene(1200, 800).save(dir.filePath(QString::number(i) + ".png")));
+        restored.addPaths({dir.path()});
+        QSignalSpy done(&restored, &MainWindow::batchComplete);
+        restored.findChild<QPushButton *>("startButton")->click(); QVERIFY(restored.busy()); restored.close();
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 20000); QTRY_VERIFY(!restored.isVisible());
+        QVERIFY(QFileInfo::exists(restored.lastReport()));
+    }
+    void guiOriginalFormatPreview() {
+        QTemporaryDir dir; QImage image(200, 100, QImage::Format_ARGB32); image.fill(Qt::transparent);
+        const auto path = dir.filePath("alpha.png"); QVERIFY(image.save(path));
+        MainWindow window; window.show();
+        window.findChild<QComboBox *>("outputFormat")->setCurrentIndex(3);
+        QSignalSpy preview(&window, &MainWindow::previewReady); window.addPaths({path});
+        QTRY_VERIFY_WITH_TIMEOUT(preview.size() > 0, 10000);
+        QVERIFY(!window.findChild<QLabel *>("afterPreview")->pixmap().isNull());
+        QSignalSpy done(&window, &MainWindow::batchComplete); window.findChild<QPushButton *>("startButton")->click();
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 10000);
+        QImage output(dir.filePath("processed/alpha_processed.png")); QVERIFY(!output.isNull());
+        QCOMPARE(output.pixelColor(0, 0).alpha(), 0);
+    }
     void guiImportPreviewAndProcessing() {
         QTemporaryDir dir;
         const QString input = dir.filePath(QStringLiteral("中文图片 space")); QVERIFY(QDir().mkpath(input));
@@ -367,8 +511,14 @@ private slots:
             // Portable screenshots and original generated samples; no private photos.
             window.findChild<QLineEdit *>("inputPath")->setText(QStringLiteral("示例图片文件夹"));
             window.findChild<QLineEdit *>("outputPath")->setText(QStringLiteral("示例图片文件夹/processed"));
+            window.findChild<QPlainTextEdit *>("fileDetails")->setPlainText(QStringLiteral("输入：示例图片文件夹/山间旅行.png\n输出：示例图片文件夹/processed/山间旅行_processed.png"));
             QTest::qWait(200);
-            QVERIFY(window.grab().save(QDir(artifacts).filePath("screenshot.png")));
+            // Render the full content at a taller layout, without private fixture paths.
+            auto *shell = window.centralWidget(); const auto previousSize = shell->size();
+            const auto fullHeight = window.findChild<QScrollArea *>("contentScroll")->widget()->height()
+                + window.findChild<QWidget *>("footerPanel")->height();
+            shell->resize(shell->width(), fullHeight); shell->layout()->activate();
+            QVERIFY(shell->grab().save(QDir(artifacts).filePath("screenshot.png"))); shell->resize(previousSize);
             QVERIFY(QFile::copy(sample, QDir(artifacts).filePath("sample_original.png")));
             QVERIFY(QFile::copy(out, QDir(artifacts).filePath("sample_processed.png")));
         }
@@ -409,6 +559,13 @@ private slots:
         const auto results = QDir(dir.filePath("out")).entryList({"*.jpg"}, QDir::Files);
         QVERIFY(results.size() < 8); QVERIFY(QFileInfo::exists(window.lastReport()));
         QVERIFY(start->isEnabled());
+        QMap<QString, QByteArray> completedHashes;
+        for (const auto &name : results) completedHashes.insert(name, digest(QDir(dir.filePath("out")).filePath(name)));
+        auto *retry = window.findChild<QPushButton *>("retryButton"); QVERIFY(retry->isEnabled()); retry->click();
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 2, 30000);
+        QCOMPARE(QDir(dir.filePath("out")).entryList({"*.jpg"}, QDir::Files).size(), 8);
+        for (auto it = completedHashes.cbegin(); it != completedHashes.cend(); ++it)
+            QCOMPARE(digest(QDir(dir.filePath("out")).filePath(it.key())), it.value());
     }
 };
 QTEST_MAIN(ImageBatchTests)
